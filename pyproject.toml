@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "molab-cli"
+version = "1.0.0"
+description = "Modern interactive TUI & CLI cloud orchestrator for MoLab with NVIDIA Blackwell (96GB VRAM) pods"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "TG Habib", email = "tgff28970@gmail.com" }
+]
+requires-python = ">=3.10"
+keywords = [
+    "molab",
+    "marimo",
+    "nvidia",
+    "blackwell",
+    "gpu",
+    "cloud-pc",
+    "tui",
+    "cli",
+    "ai",
+    "llm",
+    "gemma-3"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: System :: Distributed Computing",
+    "Topic :: Terminals"
+]
+dependencies = [
+    "click>=8.0.0",
+    "rich>=13.0.0",
+    "httpx>=0.24.0",
+    "websockets>=11.0",
+    "questionary>=2.0.0",
+    "prompt_toolkit>=3.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.20.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/The-habib/molab-cli"
+Repository = "https://github.com/The-habib/molab-cli"
+Issues = "https://github.com/The-habib/molab-cli/issues"
+Documentation = "https://github.com/The-habib/molab-cli#readme"
+
+[project.scripts]
+molab = "molab_cli.cli:main"
+molabctl = "molab_cli.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
