@@ -610,7 +610,7 @@ def start_interactive_tui() -> None:
             running_count = len(running_pods)
 
             render_banner()
-            render_status_bar(auth_info, running_count=running_count)
+            render_status_bar(auth_info, running_pods_count=running_count)
 
             choices = [
                 "📋 Browse & Manage Notebooks",

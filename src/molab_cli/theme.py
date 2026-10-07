@@ -60,8 +60,15 @@ def render_banner(subtitle: str = "Cloud Notebooks & NVIDIA Blackwell Server Hub
     ))
 
 
-def render_status_bar(auth_info: Dict[str, Any], running_pods_count: int = 0) -> None:
+def render_status_bar(
+    auth_info: Dict[str, Any],
+    running_pods_count: int = 0,
+    running_count: Optional[int] = None,
+    **kwargs: Any,
+) -> None:
     """Render a modern compact status bar showing account and pod status."""
+    if running_count is not None:
+        running_pods_count = running_count
     is_auth = auth_info.get("authenticated", False)
     email = auth_info.get("user_email") or "Not Logged In"
 

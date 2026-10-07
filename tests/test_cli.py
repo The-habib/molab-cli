@@ -33,3 +33,12 @@ def test_cli_subcommand_helps():
     for sub in ["list", "create", "compute", "shell", "exec", "gpu", "chat", "forward", "push", "pull", "install", "stop", "clone", "rename", "delete", "status", "login", "ui"]:
         result = runner.invoke(cli, [sub, "--help"])
         assert result.exit_code == 0, f"Command {sub} --help failed: {result.output}"
+
+
+def test_theme_render_status_bar():
+    from molab_cli.theme import render_banner, render_error_card, render_status_bar
+    render_banner()
+    render_status_bar({"authenticated": True, "user_email": "test@example.com"}, running_pods_count=1)
+    render_status_bar({"authenticated": True, "user_email": "test@example.com"}, running_count=2)
+    render_status_bar({"authenticated": False})
+    render_error_card("Test Error", "Test Message", hint="Test Hint")
