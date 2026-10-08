@@ -7,7 +7,57 @@
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](#)
 
 > **Modern, visually stunning standalone interactive CLI & cloud orchestrator for [MoLab](https://molab.marimo.io)**.  
-> Provision **NVIDIA RTX PRO 6000 Blackwell Server Edition (96 GB VRAM)** pods, stream interactive root bash terminals, deploy uncompressed 27B+ LLMs, and bridge cloud AI directly to `localhost:8000` with **zero typing** and **zero bytes of phone storage used**.
+> Provision **NVIDIA RTX PRO 6000 Blackwell Server Edition (96 GB VRAM)** pods, stream interactive root bash terminals, deploy uncompressed 27B+ LLMs, and bridge cloud AI directly to `localhost:80[...]
+
+---
+
+## 🎯 Why People Use This CLI
+
+`molab-cli` is built for people who want to run serious AI workloads without the friction of traditional cloud management. It is especially useful for developers, researchers, and teams that need fast access to high-memory GPU compute, interactive environments, and local-like workflows from a terminal.
+
+### Real-world use cases
+
+1. **Running large AI models locally through the cloud**
+   - Launch a Blackwell GPU pod and serve a 27B+ model in minutes.
+   - Connect tools like Open WebUI, SillyTavern, or Python clients to a local bridge endpoint.
+   - Work with powerful open-source models without managing bare-metal hardware.
+
+2. **Training and experimenting with LLMs and ML workloads**
+   - Provision a GPU workspace for fine-tuning, evaluation, and experimentation.
+   - Install Python libraries, run notebooks, and iterate quickly in a disposable cloud environment.
+   - Spin up a fresh environment per project without long setup cycles.
+
+3. **Interactive AI development from a terminal**
+   - Open a root shell in a remote GPU pod and work like you are on a local machine.
+   - Copy files to and from the cloud, install packages, and debug tasks in real time.
+   - Ideal for prototyping and shipping AI features quickly.
+
+4. **Research and benchmarking**
+   - Test model performance, inference speed, memory usage, and compatibility on high-memory GPUs.
+   - Compare configurations and workloads using reproducible cloud environments.
+   - Run heavy compute tasks without tying up local hardware.
+
+5. **Team-based AI infrastructure access**
+   - Give engineers and researchers a fast, consistent CLI to manage GPU pods.
+   - Keep experimentation isolated while maintaining a single workflow for cloud compute.
+   - Reduce onboarding time for AI projects that depend on specialized hardware.
+
+6. **Hybrid local-to-cloud workflows**
+   - Use `molab forward` to expose a cloud model server at `localhost:8000`.
+   - Keep local tools and apps unchanged while running the heavy compute remotely.
+   - Perfect for a smooth bridge between local development and cloud-scale inference.
+
+7. **Rapid environment creation for demos and presentations**
+   - Launch GPU pods on demand for showcase environments, workshops, or product demos.
+   - Deliver a polished AI experience without requiring developers to configure infrastructure manually.
+
+### Who this is for
+
+- AI engineers building or serving large models
+- Researchers running GPU-intensive experiments
+- ML practitioners testing fine-tuning, inference, and agent workflows
+- Developers who prefer a terminal-first workflow over browser-heavy cloud dashboards
+- Teams that want cloud GPUs without the operational burden of managing hardware directly
 
 ---
 
@@ -63,7 +113,7 @@ molab
 
 This launches the **Interactive Control Center**:
 ```
-╭──────────────────────────────────────────────────────────────────────────────╮
+╭────────────────────────────────────────────────────────────────�[...]
 │                                                                              │
 │   ███╗   ███╗ ██████╗ ██╗      █████╗ ██████╗                                │
 │   ████╗ ████║██╔═══██╗██║     ██╔══██╗██╔══██╗                               │
@@ -73,10 +123,10 @@ This launches the **Interactive Control Center**:
 │   ╚═╝     ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝                                │
 │                                                                              │
 │     ⚡ Cloud Notebooks & NVIDIA Blackwell Server Hub  •  v1.0.0              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭──────────────────────────────────────────────────────────────────────────────╮
+╰────────────────────────────────────────────────────────────────�[...]
+╭────────────────────────────────────────────────────────────────�[...]
 │ ● user@example.com      ⚡ 1 Pod Running (Blackwell 96GB)  NVIDIA RTX PRO 6000│
-╰──────────────────────────────────────────────────────────────────────────────╯
+╰────────────────────────────────────────────────────────────────�[...]
 
 ? Select an action:
   ❯ 📋 Browse & Manage Notebooks
