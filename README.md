@@ -6,191 +6,190 @@
 [![UI: Interactive TUI](https://img.shields.io/badge/UI-Zero--Typing%20Interactive%20TUI-magenta.svg)](#)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](#)
 
-> **Modern, visually stunning standalone interactive CLI & cloud orchestrator for [MoLab](https://molab.marimo.io)**.  
-> Provision **NVIDIA RTX PRO 6000 Blackwell Server Edition (96 GB VRAM)** pods, stream interactive root bash terminals, deploy uncompressed 27B+ LLMs, and bridge cloud AI directly to `localhost:80[...]
+A modern interactive TUI and CLI for orchestrating high-performance GPU workloads on MoLab infrastructure.
+
+`molab-cli` gives developers, researchers, and AI teams an elegant terminal-first workflow to create Blackwell GPU pods, inspect them, run commands, transfer files, and expose model endpoints locally without leaving the command line.
 
 ---
 
-## 🎯 Why People Use This CLI
+## Why this project exists
 
-`molab-cli` is built for people who want to run serious AI workloads without the friction of traditional cloud management. It is especially useful for developers, researchers, and teams that need fast access to high-memory GPU compute, interactive environments, and local-like workflows from a terminal.
+Running large AI workloads in the cloud should feel simple, fast, and reliable. Traditional cloud workflows often require juggling multiple dashboards, browser tabs, and fragmented tooling. `molab-cli` solves that by combining:
 
-### Real-world use cases
+- one-command pod lifecycle management
+- an interactive control center for zero-typing workflows
+- direct root shell access to GPU environments
+- model serving and localhost bridging for local tools
+- a clean terminal experience tailored for AI infrastructure
 
-1. **Running large AI models locally through the cloud**
-   - Launch a Blackwell GPU pod and serve a 27B+ model in minutes.
-   - Connect tools like Open WebUI, SillyTavern, or Python clients to a local bridge endpoint.
-   - Work with powerful open-source models without managing bare-metal hardware.
-
-2. **Training and experimenting with LLMs and ML workloads**
-   - Provision a GPU workspace for fine-tuning, evaluation, and experimentation.
-   - Install Python libraries, run notebooks, and iterate quickly in a disposable cloud environment.
-   - Spin up a fresh environment per project without long setup cycles.
-
-3. **Interactive AI development from a terminal**
-   - Open a root shell in a remote GPU pod and work like you are on a local machine.
-   - Copy files to and from the cloud, install packages, and debug tasks in real time.
-   - Ideal for prototyping and shipping AI features quickly.
-
-4. **Research and benchmarking**
-   - Test model performance, inference speed, memory usage, and compatibility on high-memory GPUs.
-   - Compare configurations and workloads using reproducible cloud environments.
-   - Run heavy compute tasks without tying up local hardware.
-
-5. **Team-based AI infrastructure access**
-   - Give engineers and researchers a fast, consistent CLI to manage GPU pods.
-   - Keep experimentation isolated while maintaining a single workflow for cloud compute.
-   - Reduce onboarding time for AI projects that depend on specialized hardware.
-
-6. **Hybrid local-to-cloud workflows**
-   - Use `molab forward` to expose a cloud model server at `localhost:8000`.
-   - Keep local tools and apps unchanged while running the heavy compute remotely.
-   - Perfect for a smooth bridge between local development and cloud-scale inference.
-
-7. **Rapid environment creation for demos and presentations**
-   - Launch GPU pods on demand for showcase environments, workshops, or product demos.
-   - Deliver a polished AI experience without requiring developers to configure infrastructure manually.
-
-### Who this is for
-
-- AI engineers building or serving large models
-- Researchers running GPU-intensive experiments
-- ML practitioners testing fine-tuning, inference, and agent workflows
-- Developers who prefer a terminal-first workflow over browser-heavy cloud dashboards
-- Teams that want cloud GPUs without the operational burden of managing hardware directly
+This makes it ideal for teams building with large models, running GPU intensive research, and iterating quickly in ephemeral cloud environments.
 
 ---
 
-## ✨ Features at a Glance
+## Best use cases
 
-1. **🎨 Interactive Visual Dashboard (Zero Typing)**:
-   - Run `molab` without any arguments to enter the **Interactive Control Center**.
-   - Navigate notebooks, cloud containers, AI models, and file transfers using arrow keys and instant selectors.
-   - Beautiful OLED Dark Mode aesthetic, live spinners, status pills (`🟢 RUNNING`, `⚪ STOPPED`, `⚡ BLACKWELL 96GB`).
+### 1. Large AI model deployment
+Use `molab-cli` to launch a Blackwell GPU pod and serve heavyweight open-source models with minimal setup. The local bridge support lets tools like Open WebUI or Python SDK clients connect to a remote model server as if it were running on your machine.
 
-2. **🔑 30-Second Guided Onboarding Wizard**:
-   - First time user? `molab` automatically guides you through connecting your account.
-   - Visual instructions show where to grab your master `__client` cookie from Developer Tools.
-   - Smart cookie parser accepts full headers or tokens, auto-discovers your user profile, active sessions, and organizations from Clerk.
+### 2. LLM research and experimentation
+Whether you're benchmarking models, testing prompts, fine-tuning, or exploring memory-heavy inference workflows, the CLI gives you an isolated, reproducible environment with powerful GPU resources.
 
-3. **⚡ NVIDIA RTX PRO 6000 Blackwell (96 GB VRAM)**:
-   - Provisions ephemeral CoreWeave pods powered by **NVIDIA RTX PRO 6000 Blackwell Server Edition** (`sm_120`).
-   - Access **94.97 GB GDDR7 VRAM**, **160 GiB Host RAM**, **20 CPU cores**, and **CUDA 13.0**.
+### 3. Interactive remote development
+Open a root shell inside the cloud pod, install packages, debug jobs, inspect hardware, and treat the environment like a powerful remote workstation from your terminal.
 
-4. **🤖 AI Model Studio & Localhost Bridge**:
-   - **Terminal Chat**: Chat directly with deployed models (such as `gemma-3-27b-it-abliterated`) with streaming markdown formatting.
-   - **Localhost Bridge (`molab forward`)**: Expose the cloud model server to `http://localhost:8000/v1` for use with Open WebUI, SillyTavern, or the Python OpenAI SDK.
-   - **Zero Phone Storage**: All 53+ GB of model weights remain strictly inside the cloud pod.
+### 4. Team-based cloud AI infrastructure
+Give engineers and researchers a single, consistent CLI for managing GPU workloads instead of relying on fragile ad hoc browser-based workflows.
 
-5. **💻 Ephemeral Cloud PC from Terminal**:
-   - Interactive root bash terminal over WebSockets (`wss://*.sb.molab.run/terminal/ws`) with full PTY emulation.
-   - Bidirectional file transfer (`push` / `pull`).
-   - Remote package management with `uv pip`.
+### 5. Fast, disposable AI environments
+Create GPU-backed sessions on demand for demos, experiments, workshops, and short-lived projects without maintaining long-lived infrastructure.
 
 ---
 
-## 🛠️ Installation
+## Core capabilities
+
+### Interactive control center
+Run `molab` with no arguments to open the interactive TUI and access cloud resources through a guided dashboard.
+
+Features include:
+- notebook and pod listing
+- one-click GPU pod creation
+- status and diagnostics
+- file transfer
+- package installation
+- shell access
+- AI model interaction
+
+### GPU pod orchestration
+Provision and manage GPU-powered workspaces built for NVIDIA Blackwell compute environments, including:
+- notebook and pod creation
+- lifecycle control
+- status and inspection
+- scaling between compute tiers
+- cleanup and teardown
+
+### Remote terminal access
+Open a cloud terminal with full PTY support and interact as root in a remote Linux environment.
+
+Useful for:
+- running commands
+- testing installs
+- debugging workloads
+- managing inference services
+- handling project files remotely
+
+### AI model studio and localhost bridge
+Expose cloud model endpoints to your local machine using the built-in forwarding workflow so you can connect local apps or scripts to the GPU environment.
+
+Typical integrations:
+- Open WebUI
+- SillyTavern
+- Python OpenAI SDK clients
+- curl-based testing
+
+### File transfer and package management
+Move files in and out of the remote pod and install Python libraries directly in the environment.
+
+---
+
+## Hardware profile
+
+`molab-cli` targets high-memory GPU workloads on MoLab infrastructure.
+
+| Metric | Configuration |
+|---|---|
+| GPU | NVIDIA RTX PRO 6000 Blackwell Server Edition |
+| VRAM | 94.97 GB GDDR7 |
+| Compute Capability | `sm_120` |
+| Host RAM | 160 GiB |
+| CPU Cores | 20 vCPUs |
+| CUDA | 13.0 |
+| PyTorch | 2.11.0 |
+
+This profile is purpose-built for large model inference, training, and memory-intensive experimentation.
+
+---
+
+## Installation
 
 ```bash
-# Clone or navigate to the repository
-cd /data/data/com.termux/files/home/molab-cli
-
-# Install in editable mode
+# From the repository root
 pip install -e .
 ```
 
-Both `molab` and `molabctl` commands are available globally in your PATH.
+Both `molab` and `molabctl` are available after installation.
 
 ---
 
-## 🚀 Quick Start (Zero Typing)
+## Quick start
 
-Simply type:
+Launch the interactive UI:
 
 ```bash
 molab
 ```
 
-This launches the **Interactive Control Center**:
-```
-╭────────────────────────────────────────────────────────────────�[...]
-│                                                                              │
-│   ███╗   ███╗ ██████╗ ██╗      █████╗ ██████╗                                │
-│   ████╗ ████║██╔═══██╗██║     ██╔══██╗██╔══██╗                               │
-│   ██╔████╔██║██║   ██║██║     ███████║██████╔╝                               │
-│   ██║╚██╔╝██║██║   ██║██║     ██╔══██║██╔══██╗                               │
-│   ██║ ╚═╝ ██║╚██████╔╝███████╗██║  ██║██████╔╝                               │
-│   ╚═╝     ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝                                │
-│                                                                              │
-│     ⚡ Cloud Notebooks & NVIDIA Blackwell Server Hub  •  v1.0.0              │
-╰────────────────────────────────────────────────────────────────�[...]
-╭────────────────────────────────────────────────────────────────�[...]
-│ ● user@example.com      ⚡ 1 Pod Running (Blackwell 96GB)  NVIDIA RTX PRO 6000│
-╰────────────────────────────────────────────────────────────────�[...]
-
-? Select an action:
-  ❯ 📋 Browse & Manage Notebooks
-    🚀 1-Click Launch Blackwell Pod
-    💻 Open Cloud Root Terminal (Shell)
-    🤖 AI Model Studio (Gemma 3 27B)
-    ⚡ Real-time GPU Telemetry
-    📂 Cloud File Transfer (Push / Pull)
-    📦 Python Package Manager
-    🔑 Account & Authentication
-    ❓ Quick Guide & Documentation
-    🚪 Exit
-```
+This opens the control center where you can:
+- browse notebooks
+- create a Blackwell pod
+- inspect systems
+- open a terminal
+- bridge models locally
+- transfer files
 
 ---
 
-## 📖 Command Line Reference (For Scripts & Automation)
+## Command reference
 
-All commands can be run with either `molab` or `molabctl`:
+### Interactive commands
 
-### 1. Interactive UI
 ```bash
-molab          # Launch interactive TUI Control Center
-molab ui       # Explicitly launch TUI Control Center
+molab          # Launch the interactive TUI dashboard
+molab ui       # Explicitly open the control center
 ```
 
-### 2. Workspace & Authentication
+### Authentication and session state
+
 ```bash
-molab status                            # Inspect session validity & hardware access
-molab login                             # Launch guided onboarding setup wizard
-molab login --client "<__client cookie>" # Configure cookie non-interactively
+molab status                            # Inspect session validity and hardware access
+molab login                             # Launch the guided setup wizard
+molab login --client "<__client cookie>" # Configure authentication non-interactively
 ```
 
-### 3. Notebooks & Pod Lifecycle
+### Notebook and pod lifecycle
+
 ```bash
-molab list                              # List all cloud notebooks and running status
-molab create --title "My Blackwell Pod" # 1-click create sandbox with 96GB Blackwell GPU
-molab compute <id> --blackwell          # Switch existing notebook to Blackwell GPU
-molab compute <id> --cpu-only           # Switch notebook to CPU mode
-molab inspect <id>                      # Inspect container ID, hardware, and kernel
-molab stop <id>                         # Stop / shutdown a running pod
-molab clone <id>                        # Duplicate notebook
-molab rename <id> "New Name"            # Rename notebook
-molab delete <id>                       # Delete notebook
+molab list                              # List notebooks and pod state
+molab create --title "My Blackwell Pod" # Create a new GPU-enabled pod
+molab compute <id> --blackwell          # Switch to Blackwell GPU compute
+molab compute <id> --cpu-only           # Switch to CPU-only compute
+molab inspect <id>                      # Inspect the pod and hardware details
+molab stop <id>                         # Stop a running pod
+molab clone <id>                        # Duplicate a notebook or pod
+molab rename <id> "New Name"           # Rename an environment
+molab delete <id>                      # Delete a pod or notebook
 ```
 
-### 4. Cloud PC Terminal & Remote Exec
+### Shell and execution
+
 ```bash
-molab shell <id>                        # Open interactive root bash terminal
-molab exec <id> "nvidia-smi"            # Execute one-shot bash command on pod
-molab gpu <id>                          # View Blackwell VRAM & hardware telemetry
-molab install <id> transformers vllm    # Install Python packages inside pod
+molab shell <id>                        # Open an interactive root shell
+molab exec <id> "nvidia-smi"            # Run a one-off command on the remote pod
+molab gpu <id>                          # View GPU telemetry and system details
+molab install <id> transformers vllm    # Install Python packages inside the pod
 ```
 
-### 5. AI Model Studio & Localhost Bridge
+### AI model access and localhost forwarding
+
 ```bash
-# Interactive terminal chat with deployed 27B unrestricted model:
+# Open a chat session with a deployed model
 molab chat <notebook_id>
 
-# Bridge localhost:8000 to the remote model server:
+# Expose the remote model server on localhost:8000
 molab forward <notebook_id> --port 8000
 ```
 
-Once forwarded, query `http://localhost:8000/v1` from any local app:
+Once forwarded, you can interact with the endpoint locally:
+
 ```bash
 curl http://localhost:8000/health
 
@@ -202,29 +201,84 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-### 6. Bidirectional File Transfer
+### File transfer
+
 ```bash
-molab push <id> local_file.py /marimo/script.py   # Upload file to pod
-molab pull <id> /marimo/output.csv ./output.csv   # Download file from pod
+molab push <id> local_file.py /marimo/script.py   # Upload a file to the pod
+molab pull <id> /marimo/output.csv ./output.csv   # Download a file from the pod
 ```
 
 ---
 
-## 🔬 Hardware Specifications
+## Typical workflows
 
-| Metric | CoreWeave Cloud Container Spec |
-|---|---|
-| **GPU** | NVIDIA RTX PRO 6000 Blackwell Server Edition |
-| **VRAM** | 94.97 GB GDDR7 (97,251 MB) |
-| **Compute Capability** | `sm_120` (Architecture: Blackwell, Major: 12, Minor: 0) |
-| **Multiprocessors** | 188 SMs |
-| **Host System RAM** | 160.0 GiB RAM |
-| **Host CPU Cores** | 20 vCPUs (x86_64) |
-| **CUDA & PyTorch** | CUDA 13.0 + PyTorch 2.11.0 |
-| **Local Phone Storage** | **0 Bytes Used** (Zero disk wear on device) |
+### Workflow 1: Launch a GPU pod and access a shell
+
+```bash
+molab create --title "Research Pod"
+molab list
+molab shell <pod_id>
+```
+
+Then inside the shell:
+
+```bash
+nvidia-smi
+python --version
+pip install -r requirements.txt
+```
+
+### Workflow 2: Start a local AI model bridge
+
+```bash
+molab chat <pod_id>
+molab forward <pod_id> --port 8000
+```
+
+Now connect your local tools to:
+
+```text
+http://localhost:8000/v1
+```
+
+### Workflow 3: Move code into the remote environment
+
+```bash
+molab push <pod_id> train.py /workspace/train.py
+molab exec <pod_id> "python /workspace/train.py"
+```
 
 ---
 
-## 📄 License
+## Who this is for
+
+`molab-cli` is best for:
+
+- AI engineers deploying and testing large models
+- ML researchers running GPU-heavy experiments
+- developers needing remote GPU workstations from a terminal
+- teams building local-to-cloud AI workflows
+- users who want a guided, interactive alternative to browser-first cloud tooling
+
+---
+
+## Why developers choose it
+
+- fast onboarding with guided login flow
+- minimal friction for cloud GPU management
+- keyboard-first workflow in the terminal
+- direct access to remote environments with root shell access
+- polished experience designed for AI and GPU workloads
+- seamless transition between local tools and cloud infrastructure
+
+---
+
+## License
 
 MIT License. Copyright (c) 2026 TG Habib.
+
+---
+
+## Project status
+
+This project is designed for modern AI infrastructure workflows and is optimized for MoLab resources with Blackwell GPU capabilities.
