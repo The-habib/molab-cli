@@ -498,4 +498,87 @@ Inspect and manage Python packages natively on the pod.
   molab pkg add nb_xxx torchaudio --upgrade
   ```
 
+---
+
+## 10. Anti-Idle Keepalive & Session Renewal (v2.3)
+
+### `molab keepalive <subcommand> <notebook_id> [args]`
+Defeat the 30-minute idle session timeout by running an autonomous background heartbeat daemon that continuously renews Clerk tokens and pings the CoreWeave data plane proxy.
+
+* **Subcommands:**
+  * `start <id>`: Launch detached background daemon (`--interval <sec>`, `--max-hours <hours>`, `--auto-restore / --no-auto-restore`, `-j, --json`).
+  * `stop <id>`: Terminate running keepalive daemon.
+  * `status <id>`: Query live daemon PID, heartbeat count, auto-restores, and remaining TTL (`-j, --json`).
+  * `list`: List all active and historic keepalive daemons (`-j, --json`).
+  * `logs <id>`: View trailing heartbeat logs (`--lines <n>`).
+
+* **Example:**
+  ```bash
+  # Keep pod alive indefinitely and auto-restore workspace if pod ever resets:
+  molab keepalive start nb_emuqXoWkVed6jPNZxND7eo --interval 120 --auto-restore
+
+  # Inspect daemon health:
+  molab keepalive status nb_emuqXoWkVed6jPNZxND7eo
+  molab keepalive logs nb_emuqXoWkVed6jPNZxND7eo --lines 20
+
+  # Stop daemon when finished:
+  molab keepalive stop nb_emuqXoWkVed6jPNZxND7eo
+  ```
+
+---
+
+## 11. Workspace Snapshots & Checkpoints (v2.3)
+
+### `molab snapshot <subcommand> [args]`
+Capture compressed archives of pod `/workspace`, stream them to local persistent storage (`~/.config/molab/snapshots/`), and restore them on demand or automatically upon pod resurrection.
+
+* **Subcommands:**
+  * `create <id>`: Pack `/workspace`, stream tarball to local storage, record SHA-256 in SQLite (`--name <name>`, `--remote-path <dir>`, `-j, --json`).
+  * `restore <id>`: Stream archive to pod and unpack into `/workspace` (`--snapshot-id <id>`, `--remote-path <dir>`, `-j, --json`).
+  * `list [id]`: List saved snapshots (`--limit <n>`, `-j, --json`).
+  * `delete <snapshot_id>`: Delete local archive file and remove database entry.
+
+* **Example:**
+  ```bash
+  # Take a snapshot before running fine-tuning:
+  molab snapshot create nb_xxx --name "pre-finetune"
+
+  # List snapshots:
+  molab snapshot list nb_xxx
+
+  # Restore latest snapshot:
+  molab snapshot restore nb_xxx
+
+  # Delete snapshot:
+  molab snapshot delete snap_abc123
+  ```
+
+---
+
+## 12. Multi-Gigabit Cloud Storage Bridge (v2.3)
+
+### `molab storage <subcommand> <notebook_id> [args]`
+Leverage pod pre-installed tools (`rclone`, `huggingface-cli`, `git`) for multi-gigabit transfers directly between cloud storage and pod `/workspace`.
+
+* **Subcommands:**
+  * `rclone-config <id>`: Push local `~/.config/rclone/rclone.conf` to pod (`--config <path>`).
+  * `rclone-backup <id> <remote_dest>`: Sync `/workspace` directly to remote bucket (`--source-dir <dir>`, `--flags <flags>`).
+  * `rclone-restore <id> <remote_source>`: Restore `/workspace` directly from remote bucket (`--target-dir <dir>`, `--flags <flags>`).
+  * `hf-pull <id> <repo_id>`: Download weights/datasets from Hugging Face Hub (`--dest <dir>`, `--filename <file>`, `--token <tok>`).
+  * `hf-push <id> <local_path> <repo_id>`: Upload model weights to Hugging Face Hub (`--type <model|dataset>`, `--token <tok>`).
+  * `git-clone <id> <repo_url>`: Clone git repo onto pod (`--dest <dir>`, `--branch <branch>`).
+
+* **Example:**
+  ```bash
+  # Upload rclone config:
+  molab storage rclone-config nb_xxx
+
+  # Sync workspace to Cloudflare R2 at 10Gbps+:
+  molab storage rclone-backup nb_xxx r2:my-bucket/weights
+
+  # Pull model from Hugging Face Hub:
+  molab storage hf-pull nb_xxx meta-llama/Llama-3-8b --dest /workspace/llama3
+  ```
+
+
 

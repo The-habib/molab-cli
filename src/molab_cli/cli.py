@@ -5,6 +5,7 @@ Rich CLI interface for molabctl.
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -1950,6 +1951,414 @@ def cmd_pkg_add(notebook_id: str, package_name: str, upgrade: bool):
             console.print(f"[bold green]✔ Successfully installed {package_name}![/bold green]")
         except Exception as e:
             console.print(f"[red]Installation error:[/red] {e}")
+
+
+# -----------------------------------------------------------------------------
+# Snapshot & Checkpoint Group
+# -----------------------------------------------------------------------------
+
+@cli.group("snapshot")
+def snapshot_group():
+    """Create, restore, and manage persistent workspace snapshots across pod resets."""
+    pass
+
+
+@snapshot_group.command("create")
+@click.argument("notebook_id")
+@click.option("--name", default=None, help="Descriptive snapshot checkpoint name")
+@click.option("--remote-path", default="/workspace", help="Remote pod directory to archive")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output snapshot metadata as JSON")
+def cmd_snapshot_create(notebook_id: str, name: Optional[str], remote_path: str, as_json: bool):
+    """Create a compressed snapshot of pod workspace and stream to local persistent storage."""
+    from molab_cli.snapshots import SnapshotManager
+    sm = SnapshotManager()
+    with console.status(f"[bold cyan]Archiving and streaming snapshot from {notebook_id}:{remote_path}...[/bold cyan]"):
+        try:
+            snap = sm.create_snapshot(notebook_id=notebook_id, name=name, remote_path=remote_path)
+        except Exception as e:
+            if as_json:
+                print(json.dumps({"error": str(e)}))
+            else:
+                console.print(f"[red]Snapshot creation failed:[/red] {e}")
+            return
+
+    if as_json:
+        print(json.dumps(snap, indent=2))
+        return
+
+    size_mb = round(snap["size_bytes"] / (1024 * 1024), 2)
+    console.print(Panel(
+        f"[bold green]Workspace Snapshot Saved Successfully![/bold green]\n"
+        f"• Snapshot ID:  [bold cyan]{snap['id']}[/bold cyan]\n"
+        f"• Name:         {snap['name']}\n"
+        f"• Files:        {snap['file_count']} files ({size_mb} MB)\n"
+        f"• SHA-256:      [dim]{snap['sha256'][:16]}...[/dim]\n"
+        f"• Local Archive: [dim]{snap['local_archive_path']}[/dim]\n\n"
+        f"Restore anytime: [bold]molab snapshot restore {notebook_id} --snapshot-id {snap['id']}[/bold]",
+        title="Workspace Snapshot",
+        border_style="green",
+    ))
+
+
+@snapshot_group.command("restore")
+@click.argument("notebook_id")
+@click.option("--snapshot-id", default=None, help="Specific snapshot ID (default: latest snapshot)")
+@click.option("--remote-path", default="/workspace", help="Destination pod directory to unpack into")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output restore summary as JSON")
+def cmd_snapshot_restore(notebook_id: str, snapshot_id: Optional[str], remote_path: str, as_json: bool):
+    """Restore a snapshot into the remote pod's /workspace directory."""
+    from molab_cli.snapshots import SnapshotManager
+    sm = SnapshotManager()
+    with console.status(f"[bold cyan]Streaming snapshot archive into {notebook_id}:{remote_path}...[/bold cyan]"):
+        try:
+            res = sm.restore_snapshot(notebook_id=notebook_id, snapshot_id=snapshot_id, remote_path=remote_path)
+        except Exception as e:
+            if as_json:
+                print(json.dumps({"error": str(e)}))
+            else:
+                console.print(f"[red]Restore failed:[/red] {e}")
+            return
+
+    if as_json:
+        print(json.dumps(res, indent=2))
+        return
+
+    console.print(Panel(
+        f"[bold green]Snapshot Restored Successfully![/bold green]\n"
+        f"• Snapshot ID:    [bold cyan]{res['snapshot_id']}[/bold cyan]\n"
+        f"• Target Path:    {res['remote_path']}\n"
+        f"• Files Restored: {res['files_restored']}\n"
+        f"• Duration:       {res['duration_seconds']}s",
+        title="Snapshot Restored",
+        border_style="green",
+    ))
+
+
+@snapshot_group.command("list")
+@click.argument("notebook_id", required=False)
+@click.option("--limit", default=25, help="Max snapshots to show")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output snapshots as JSON")
+def cmd_snapshot_list(notebook_id: Optional[str], limit: int, as_json: bool):
+    """List saved snapshots and checkpoints."""
+    from molab_cli.snapshots import SnapshotManager
+    sm = SnapshotManager()
+    snaps = sm.list_snapshots(notebook_id=notebook_id, limit=limit)
+    if as_json:
+        print(json.dumps(snaps, indent=2))
+        return
+
+    if not snaps:
+        console.print("[yellow]No snapshots found.[/yellow]")
+        return
+
+    table = Table(title="[bold cyan]MoLab Workspace Snapshots[/bold cyan]", box=box.ROUNDED)
+    table.add_column("Snapshot ID", style="cyan")
+    table.add_column("Pod / Notebook", style="dim")
+    table.add_column("Name", style="white")
+    table.add_column("Files", justify="right")
+    table.add_column("Size (MB)", justify="right")
+    table.add_column("Created", style="dim")
+
+    for s in snaps:
+        size_mb = round(s["size_bytes"] / (1024 * 1024), 2)
+        created_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["created_at"])) if s.get("created_at") else "-"
+        table.add_row(
+            s["id"],
+            s["notebook_id"][:12] + "...",
+            s["name"] or "-",
+            str(s["file_count"]),
+            str(size_mb),
+            created_str,
+        )
+    console.print(table)
+
+
+@snapshot_group.command("delete")
+@click.argument("snapshot_id")
+def cmd_snapshot_delete(snapshot_id: str):
+    """Delete a local snapshot archive and database entry."""
+    from molab_cli.snapshots import SnapshotManager
+    sm = SnapshotManager()
+    ok = sm.delete_snapshot(snapshot_id)
+    if ok:
+        console.print(f"[bold green]✔ Deleted snapshot {snapshot_id}[/bold green]")
+    else:
+        console.print(f"[red]Snapshot not found: {snapshot_id}[/red]")
+
+
+# -----------------------------------------------------------------------------
+# Keepalive & Anti-Idle Group
+# -----------------------------------------------------------------------------
+
+@cli.group("keepalive")
+def keepalive_group():
+    """Autonomous anti-idle heartbeats, session renewal, and pod resurrection."""
+    pass
+
+
+@keepalive_group.command("start")
+@click.argument("notebook_id")
+@click.option("--interval", default=120, help="Heartbeat interval in seconds (default: 120)")
+@click.option("--max-hours", default=None, type=float, help="Max runtime in hours (default: unlimited)")
+@click.option("--auto-restore/--no-auto-restore", default=True, help="Auto-restore snapshot if pod resets")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output daemon record as JSON")
+def cmd_keepalive_start(notebook_id: str, interval: int, max_hours: Optional[float], auto_restore: bool, as_json: bool):
+    """Launch detached anti-idle keepalive daemon in background."""
+    from molab_cli.keepalive import KeepaliveManager
+    km = KeepaliveManager()
+    try:
+        rec = km.start_daemon(notebook_id=notebook_id, interval=interval, max_hours=max_hours, auto_restore=auto_restore)
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[red]Failed to start keepalive:[/red] {e}")
+        return
+
+    if as_json:
+        print(json.dumps(rec, indent=2))
+        return
+
+    console.print(Panel(
+        f"[bold green]Keepalive Daemon Started in Background![/bold green]\n"
+        f"• Notebook:     [bold cyan]{rec['notebook_id']}[/bold cyan]\n"
+        f"• Daemon PID:   [bold]{rec['pid']}[/bold]\n"
+        f"• Interval:     {rec['interval_seconds']} seconds\n"
+        f"• Max Hours:    {rec['max_hours'] or 'Unlimited'}\n"
+        f"• Auto-Restore: {'Enabled' if rec['auto_restore'] else 'Disabled'}\n"
+        f"• Log File:     [dim]{rec['log_path']}[/dim]\n\n"
+        f"Check status: [bold]molab keepalive status {notebook_id}[/bold]\n"
+        f"Tail logs:    [bold]molab keepalive logs {notebook_id}[/bold]\n"
+        f"Stop daemon:  [bold]molab keepalive stop {notebook_id}[/bold]",
+        title="Pod Anti-Idle Keepalive",
+        border_style="green",
+    ))
+
+
+@keepalive_group.command("stop")
+@click.argument("notebook_id")
+def cmd_keepalive_stop(notebook_id: str):
+    """Stop the background keepalive daemon for a pod."""
+    from molab_cli.keepalive import KeepaliveManager
+    km = KeepaliveManager()
+    ok = km.stop_daemon(notebook_id)
+    if ok:
+        console.print(f"[bold green]✔ Keepalive daemon stopped for {notebook_id}[/bold green]")
+    else:
+        console.print(f"[yellow]No active keepalive daemon found for {notebook_id}[/yellow]")
+
+
+@keepalive_group.command("status")
+@click.argument("notebook_id")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output status as JSON")
+def cmd_keepalive_status(notebook_id: str, as_json: bool):
+    """Inspect status of keepalive daemon and session TTL."""
+    from molab_cli.keepalive import KeepaliveManager
+    km = KeepaliveManager()
+    status = km.get_status(notebook_id)
+    if as_json:
+        print(json.dumps(status or {}, indent=2))
+        return
+
+    if not status:
+        console.print(f"[yellow]No keepalive records for {notebook_id}[/yellow]")
+        return
+
+    st = status.get("status", "unknown")
+    st_color = "green" if st == "running" else "red"
+    last_hb = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(status["last_heartbeat_at"])) if status.get("last_heartbeat_at") else "-"
+
+    console.print(Panel(
+        f"[bold white]Status:[/bold white]          [bold {st_color}]{st.upper()}[/bold {st_color}]\n"
+        f"[bold white]PID:[/bold white]             {status.get('pid') or '-'}\n"
+        f"[bold white]Heartbeats:[/bold white]      {status.get('heartbeat_count', 0)}\n"
+        f"[bold white]Auto-Restores:[/bold white]   {status.get('restores_triggered', 0)}\n"
+        f"[bold white]Last Heartbeat:[/bold white]  {last_hb}\n"
+        f"[bold white]Log Path:[/bold white]        [dim]{status.get('log_path')}[/dim]",
+        title=f"Keepalive Status: {notebook_id}",
+        border_style="cyan",
+    ))
+
+
+@keepalive_group.command("list")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output list as JSON")
+def cmd_keepalive_list(as_json: bool):
+    """List all tracked keepalive daemons."""
+    from molab_cli.keepalive import KeepaliveManager
+    km = KeepaliveManager()
+    items = km.list_keepalives()
+    if as_json:
+        print(json.dumps(items, indent=2))
+        return
+
+    if not items:
+        console.print("[yellow]No keepalive daemons found.[/yellow]")
+        return
+
+    table = Table(title="[bold cyan]MoLab Anti-Idle Keepalive Daemons[/bold cyan]", box=box.ROUNDED)
+    table.add_column("Notebook ID", style="cyan")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("PID", justify="right")
+    table.add_column("Interval", justify="right")
+    table.add_column("Heartbeats", justify="right")
+    table.add_column("Restores", justify="right")
+    table.add_column("Started", style="dim")
+
+    for item in items:
+        st = item.get("status", "unknown")
+        st_color = "green" if st == "running" else "dim"
+        started_str = time.strftime("%m-%d %H:%M", time.localtime(item["started_at"])) if item.get("started_at") else "-"
+        table.add_row(
+            item["notebook_id"],
+            f"[{st_color}]{st}[/{st_color}]",
+            str(item.get("pid") or "-"),
+            f"{item.get('interval_seconds')}s",
+            str(item.get("heartbeat_count", 0)),
+            str(item.get("restores_triggered", 0)),
+            started_str,
+        )
+    console.print(table)
+
+
+@keepalive_group.command("logs")
+@click.argument("notebook_id")
+@click.option("--lines", default=50, help="Number of trailing log lines to show")
+def cmd_keepalive_logs(notebook_id: str, lines: int):
+    """View heartbeat logs for a keepalive daemon."""
+    from molab_cli.keepalive import get_keepalive_log_path
+    log_p = get_keepalive_log_path(notebook_id)
+    if not os.path.exists(log_p):
+        console.print(f"[yellow]No log file found at {log_p}[/yellow]")
+        return
+
+    with open(log_p, "r", encoding="utf-8", errors="ignore") as f:
+        all_lines = f.readlines()
+        tail = "".join(all_lines[-lines:])
+    console.print(tail, markup=False)
+
+
+@keepalive_group.command("run", hidden=True)
+@click.argument("notebook_id")
+@click.option("--interval", default=120, type=int)
+@click.option("--max-hours", default=None, type=float)
+@click.option("--auto-restore/--no-auto-restore", default=True)
+def cmd_keepalive_run(notebook_id: str, interval: int, max_hours: Optional[float], auto_restore: bool):
+    """Internal worker command for keepalive loop execution."""
+    from molab_cli.keepalive import KeepaliveManager
+    km = KeepaliveManager()
+    km.run_loop(notebook_id=notebook_id, interval=interval, max_hours=max_hours, auto_restore=auto_restore)
+
+
+# -----------------------------------------------------------------------------
+# Cloud Storage Bridge Group
+# -----------------------------------------------------------------------------
+
+@cli.group("storage")
+def storage_group():
+    """Multi-gigabit cloud persistence directly on pod (rclone, Hugging Face, git)."""
+    pass
+
+
+@storage_group.command("rclone-config")
+@click.argument("notebook_id")
+@click.option("--config", "config_path", default=None, help="Path to local rclone.conf (default: ~/.config/rclone/rclone.conf)")
+def cmd_storage_rclone_config(notebook_id: str, config_path: Optional[str]):
+    """Upload local rclone credentials to pod for direct cloud sync."""
+    from molab_cli.storage import StorageBridge
+    sb = StorageBridge(notebook_id)
+    with console.status("[bold cyan]Uploading rclone configuration to pod...[/bold cyan]"):
+        try:
+            sb.setup_rclone_config(config_path)
+            console.print("[bold green]✔ rclone credentials successfully configured on pod![/bold green]")
+        except Exception as e:
+            console.print(f"[red]Configuration failed:[/red] {e}")
+
+
+@storage_group.command("rclone-backup")
+@click.argument("notebook_id")
+@click.argument("remote_dest")
+@click.option("--source-dir", default="/workspace", help="Pod directory to sync (default: /workspace)")
+@click.option("--flags", default=None, help="Additional rclone flags")
+def cmd_storage_rclone_backup(notebook_id: str, remote_dest: str, source_dir: str, flags: Optional[str]):
+    """Sync pod /workspace directly to remote cloud bucket (S3/R2/B2/GCS) at 10Gbps+."""
+    from molab_cli.storage import StorageBridge
+    sb = StorageBridge(notebook_id)
+    with console.status(f"[bold cyan]Backing up {source_dir} to {remote_dest} via rclone...[/bold cyan]"):
+        try:
+            res = sb.rclone_sync_to_cloud(remote_dest=remote_dest, source_dir=source_dir, extra_flags=flags)
+            console.print(f"[bold green]✔ Cloud backup completed:[/bold green]\n{res['output']}")
+        except Exception as e:
+            console.print(f"[red]Backup failed:[/red] {e}")
+
+
+@storage_group.command("rclone-restore")
+@click.argument("notebook_id")
+@click.argument("remote_source")
+@click.option("--target-dir", default="/workspace", help="Pod directory to unpack into (default: /workspace)")
+@click.option("--flags", default=None, help="Additional rclone flags")
+def cmd_storage_rclone_restore(notebook_id: str, remote_source: str, target_dir: str, flags: Optional[str]):
+    """Restore pod /workspace directly from remote cloud bucket at 10Gbps+."""
+    from molab_cli.storage import StorageBridge
+    sb = StorageBridge(notebook_id)
+    with console.status(f"[bold cyan]Restoring from {remote_source} to {target_dir} via rclone...[/bold cyan]"):
+        try:
+            res = sb.rclone_sync_from_cloud(remote_source=remote_source, target_dir=target_dir, extra_flags=flags)
+            console.print(f"[bold green]✔ Cloud restore completed:[/bold green]\n{res['output']}")
+        except Exception as e:
+            console.print(f"[red]Restore failed:[/red] {e}")
+
+
+@storage_group.command("hf-pull")
+@click.argument("notebook_id")
+@click.argument("repo_id")
+@click.option("--dest", default="/workspace", help="Pod destination directory")
+@click.option("--filename", default=None, help="Optional specific file to pull")
+@click.option("--token", default=None, help="Hugging Face access token")
+def cmd_storage_hf_pull(notebook_id: str, repo_id: str, dest: str, filename: Optional[str], token: Optional[str]):
+    """Download model/dataset directly from Hugging Face Hub to pod at 10Gbps+."""
+    from molab_cli.storage import StorageBridge
+    sb = StorageBridge(notebook_id)
+    with console.status(f"[bold cyan]Downloading {repo_id} to {dest} on pod...[/bold cyan]"):
+        try:
+            res = sb.hf_download(repo_id=repo_id, dest_dir=dest, filename=filename, token=token)
+            console.print(f"[bold green]✔ Hugging Face download finished:[/bold green]\n{res['output']}")
+        except Exception as e:
+            console.print(f"[red]Download failed:[/red] {e}")
+
+
+@storage_group.command("hf-push")
+@click.argument("notebook_id")
+@click.argument("local_pod_path")
+@click.argument("repo_id")
+@click.option("--type", "repo_type", default="model", help="Repository type: model, dataset, space")
+@click.option("--token", default=None, help="Hugging Face access token")
+def cmd_storage_hf_push(notebook_id: str, local_pod_path: str, repo_id: str, repo_type: str, token: Optional[str]):
+    """Upload model weights or datasets directly from pod to Hugging Face Hub."""
+    from molab_cli.storage import StorageBridge
+    sb = StorageBridge(notebook_id)
+    with console.status(f"[bold cyan]Uploading {local_pod_path} to {repo_id}...[/bold cyan]"):
+        try:
+            res = sb.hf_upload(local_pod_path=local_pod_path, repo_id=repo_id, repo_type=repo_type, token=token)
+            console.print(f"[bold green]✔ Hugging Face upload finished:[/bold green]\n{res['output']}")
+        except Exception as e:
+            console.print(f"[red]Upload failed:[/red] {e}")
+
+
+@storage_group.command("git-clone")
+@click.argument("notebook_id")
+@click.argument("repo_url")
+@click.option("--dest", default=None, help="Destination directory on pod")
+@click.option("--branch", default=None, help="Specific git branch")
+def cmd_storage_git_clone(notebook_id: str, repo_url: str, dest: Optional[str], branch: Optional[str]):
+    """Clone a git repository directly onto the pod."""
+    from molab_cli.storage import StorageBridge
+    sb = StorageBridge(notebook_id)
+    with console.status(f"[bold cyan]Cloning {repo_url} on pod...[/bold cyan]"):
+        try:
+            res = sb.git_clone(repo_url=repo_url, dest_dir=dest, branch=branch)
+            console.print(f"[bold green]✔ Git clone completed:[/bold green]\n{res['output']}")
+        except Exception as e:
+            console.print(f"[red]Git clone failed:[/red] {e}")
 
 
 def main():

@@ -10,13 +10,13 @@
 
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/Architecture-Cloud--Native%20TUI%20%26%20CLI-blue.svg" alt="Architecture"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Engine-Multi--Pod%20Orchestrator%20v2.2-0ea5e9.svg" alt="Orchestration"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Engine-Anti--Idle%20%26%20Multi--Pod%20Orchestrator%20v2.3-0ea5e9.svg" alt="Orchestration"></a>
   <a href="#"><img src="https://img.shields.io/badge/GPU-NVIDIA%20Blackwell%20(96GB%20VRAM)-76b900.svg" alt="GPU"></a>
   <a href="#"><img src="https://img.shields.io/badge/Transfer-Native%20HTTP%2F2%20Streaming-success.svg" alt="File Transfer"></a>
   <a href="#"><img src="https://img.shields.io/badge/Jobs-SQLite%20DAG%20%26%20Batch%20Queue-orange.svg" alt="Jobs"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Backend-Native%20Marimo%20REST%20%26%20Kernel%20Eval-blueviolet.svg" alt="Backend"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(29%20Tools)-purple.svg" alt="MCP"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-75%20Passed%20(100%25)-success.svg" alt="Tests"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Persistence-Anti--Idle%20Heartbeat%20%26%20Snapshots-emerald.svg" alt="Persistence"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(38%20Tools)-purple.svg" alt="MCP"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-86%20Passed%20(100%25)-success.svg" alt="Tests"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-Termux%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
@@ -315,6 +315,62 @@ molab pkg list <id> --json
 molab pkg add <id> flash-attn --upgrade
 ```
 
+### 8. Anti-Idle Keepalive & Session Renewal (v2.3)
+Keep ephemeral CoreWeave pods alive indefinitely by defeating the 30-minute idle reaper:
+```bash
+# Start background heartbeat daemon with auto-restoration enabled:
+molab keepalive start <id> --interval 120 --auto-restore
+
+# Inspect daemon health, heartbeat counter, and remaining session TTL:
+molab keepalive status <id>
+molab keepalive logs <id> --lines 50
+
+# List all tracked keepalive daemons:
+molab keepalive list
+
+# Cleanly stop keepalive daemon:
+molab keepalive stop <id>
+```
+
+### 9. Workspace Snapshots & Checkpoint Auto-Persistence (v2.3)
+Preserve pod files across unexpected reboots, timeouts, or cluster maintenance:
+```bash
+# Capture compressed workspace snapshot and stream to ~/.config/molab/snapshots/:
+molab snapshot create <id> --name "Checkpoint before fine-tune"
+
+# List saved snapshots with SHA-256 manifests and file counts:
+molab snapshot list <id>
+
+# Restore latest snapshot (or specific ID) into pod /workspace in seconds:
+molab snapshot restore <id>
+molab snapshot restore <id> --snapshot-id snap_xxx
+
+# Delete local archive when no longer needed:
+molab snapshot delete snap_xxx
+```
+
+### 10. Multi-Gigabit Cloud Storage Bridge (v2.3)
+Leverage pod-installed utilities (`rclone`, `huggingface-cli`, `git`) for multi-gigabit transfers without touching local phone flash:
+```bash
+# Configure pod with local rclone credentials:
+molab storage rclone-config <id>
+
+# Sync /workspace directly to cloud storage (S3/R2/B2/GCS) at 10Gbps+:
+molab storage rclone-backup <id> r2:my-bucket/weights
+
+# Restore /workspace directly from cloud storage:
+molab storage rclone-restore <id> r2:my-bucket/weights
+
+# Download model weights or datasets directly from Hugging Face Hub:
+molab storage hf-pull <id> meta-llama/Llama-3-8b --dest /workspace/llama3
+
+# Push trained model weights from pod to Hugging Face Hub:
+molab storage hf-push <id> /workspace/finetune my-org/my-finetuned-model
+
+# Clone git repository directly onto pod:
+molab storage git-clone <id> https://github.com/vllm-project/vllm.git
+```
+
 ---
 
 ## 🤖 Model Context Protocol (MCP) Integration
@@ -332,7 +388,7 @@ molab pkg add <id> flash-attn --upgrade
 }
 ```
 
-### Exposed MCP Tools (29 Typed Tools):
+### Exposed MCP Tools (38 Typed Tools):
 - **`molab_doctor`**: Diagnose environment health and connectivity.
 - **`molab_capabilities`**: Discover supported hardware, storage, and runtimes.
 - **`molab_list_pods`**: List all notebooks and active sandboxes.
@@ -362,6 +418,15 @@ molab pkg add <id> flash-attn --upgrade
 - **`molab_file_details`**: Fetch metadata, mime type, and readable text contents.
 - **`molab_file_search`**: Fast server-side recursive file and directory search.
 - **`molab_pkg_list`**: List installed Python packages via native Marimo package manager.
+- **`molab_snapshot_create`**: Save compressed workspace snapshot to local storage.
+- **`molab_snapshot_restore`**: Restore snapshot archive into pod `/workspace`.
+- **`molab_snapshot_list`**: List saved workspace snapshots and SHA-256 metadata.
+- **`molab_keepalive_start`**: Start background anti-idle daemon with auto-restore.
+- **`molab_keepalive_stop`**: Stop running anti-idle keepalive daemon.
+- **`molab_keepalive_status`**: Inspect keepalive daemon status and remaining session TTL.
+- **`molab_storage_backup`**: Sync pod directory directly to S3/R2/B2/GCS via rclone.
+- **`molab_storage_restore`**: Restore pod directory directly from cloud via rclone.
+- **`molab_storage_hf_pull`**: Download model/dataset directly from Hugging Face Hub to pod.
 
 ---
 
@@ -383,10 +448,17 @@ pod = sdk.get_free_pod()
 if not pod:
     raise RuntimeError("No idle Blackwell pod available")
 
-# 3. Delta synchronize project directory
+# 3. Start anti-idle daemon to prevent the 30-minute session timeout
+pod.start_keepalive(interval=120, auto_restore=True)
+
+# 4. Delta synchronize project directory
 pod.sync("./my_project", "/workspace/my_project")
 
-# 4. Submit an asynchronous background job
+# 5. Capture a workspace snapshot before running heavy compute
+snap = pod.create_snapshot(name="pre-training-checkpoint")
+print(f"Saved Snapshot: {snap['id']} ({snap['file_count']} files)")
+
+# 6. Submit an asynchronous background job
 job = pod.submit_job(
     command="python3 /workspace/my_project/train.py --batch-size 32",
     name="finetune-run-1",
@@ -394,7 +466,7 @@ job = pod.submit_job(
 )
 print(f"Submitted Job ID: {job['id']}")
 
-# 5. Refresh status and download artifacts
+# 7. Refresh status and download artifacts
 status = sdk.get_job(job["id"])
 if status["status"] == "COMPLETED":
     sdk.job_manager.download_artifacts(job["id"], "./results")

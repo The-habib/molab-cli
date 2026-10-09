@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "molab-cli"
-version = "2.2.0"
-description = "Autonomous Multi-Pod Cloud GPU Orchestrator for MoLab with NVIDIA Blackwell (96GB VRAM) pods"
+version = "2.3.0"
+description = "Autonomous Multi-Pod Cloud GPU Orchestrator, Anti-Idle Keepalive & Workspace Persistence Engine for MoLab with NVIDIA Blackwell (96GB VRAM) pods"
 readme = "README.md"
 license = "MIT"
 authors = [

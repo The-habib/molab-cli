@@ -178,5 +178,57 @@ Protected endpoints such as `/api/export/*` and `/api/kernel/*` enforce active s
 - `/api/files/search`: Recursive file tree scanning executed server-side.
 - `/api/packages/list` & `/api/packages/add`: Native package management integrated with Marimo's dependency manager.
 
+---
+
+## 8. Anti-Idle Keepalive, Session Renewal & Workspace Auto-Persistence (v2.3)
+
+Ephemeral cloud pods on CoreWeave impose a dual constraint:
+1. **The 30-Minute Idle Reaper:** Sessions expire automatically 1800 seconds after creation unless actively renewed.
+2. **Container Ephemerality & Data Loss:** Pod root filesystems run on ephemeral container overlayfs. When a container times out, stops, or re-provisions, `/workspace` is cleared.
+
+```
++───────────────────────────────────────────────────────────────────────────────────+
+│ MoLab Control Plane (https://molab.marimo.io)                                     │
+│   Clerk Session Tokens: expires_at = now + 1800 (30 min window)                   │
++───────────────────────────────────────────────────────────────────────────────────+
+                               ▲
+                 Token Renewal │ Force Refresh (every 10-15m)
+                               │
++───────────────────────────────────────────────────────────────────────────────────+
+│ Android / Termux Keepalive Daemon (molab keepalive run)                           │
+│   ├── Token Renewal Cycle  : Calls session.resolve(force_refresh=True)            │
+│   ├── Data Plane Keepalive : Pings /api/usage every 120s to keep proxy warm       │
+│   ├── Pod Reset Detection  : Compares current sandbox_id with last known ID       │
+│   └── Auto-Restore Trigger : Calls SnapshotManager.restore_snapshot() on reset    │
++───────────────────────────────────────────────────────────────────────────────────+
+                               │
+               Snapshot Stream │ HTTP Multipart Streaming (/api/files/*)
+                               ▼
++───────────────────────────────────────────────────────────────────────────────────+
+│ Remote Pod Sandbox (CoreWeave Kubernetes)                                         │
+│   /workspace (Ephemeral Container) ◄──── Auto-Restored from ~/.config/molab/     │
+│   /usr/bin/rclone                 ─────► Direct 10Gbps+ S3/R2 Cloud Sync          │
+│   /usr/local/bin/huggingface-cli  ─────► Direct 10Gbps+ Hugging Face Hub Pull     │
++───────────────────────────────────────────────────────────────────────────────────+
+```
+
+### 8.1 Dual-Layer Idle Renewal
+- **Control Plane Layer:** `KeepaliveManager` monitors token TTL (`expires_at - time.time()`). When remaining TTL drops below 900 seconds, it triggers `session.resolve(force_refresh=True)`. The MoLab control plane mints a fresh token extending the session by an additional 1800 seconds.
+- **Data Plane Layer:** CoreWeave HTTP/WebSocket proxy tunnels track idle connection timers. The daemon dispatches lightweight `GET /api/usage?token=...` requests every 120 seconds, preventing proxy termination without running subshells.
+
+### 8.2 Pod Resurrection & Workspace Snapshots
+- **Automatic Pod Reset Detection:** If CoreWeave re-provisions a pod, its `sandbox_id` changes. The keepalive daemon detects this transition and queries `SnapshotManager.get_latest_snapshot(notebook_id)`.
+- **Streaming Snapshot Engine (`molab_cli/snapshots.py`):**
+  - Compresses `/workspace` on the remote pod using `tar -czf` with cache exclusions (`__pycache__`, `.cache`, `.git/objects`).
+  - Streams the tarball directly to `~/.config/molab/snapshots/<notebook_id>/` via `GET /api/files/download`.
+  - Computes and verifies SHA-256 hashes between remote and local files.
+  - On restoration, streams the archive via `POST /api/files/create` and unpacks it directly into `/workspace`.
+
+### 8.3 Direct Cloud Storage Bridge (`molab_cli/storage.py`)
+- For massive model checkpoints (20GB–70GB), routing bytes through mobile phone storage is prohibitive.
+- The pod container pre-installs `/usr/bin/rclone` and `/usr/local/bin/huggingface-cli`.
+- `StorageBridge` allows agents and users to sync `/workspace` directly to remote object storage (Cloudflare R2, AWS S3, Backblaze B2, Google Cloud Storage) at 10Gbps+ data center speeds without consuming phone storage.
+
+
 
 

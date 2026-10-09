@@ -15,9 +15,12 @@ from molab_cli.capabilities import discover_capabilities, run_doctor
 from molab_cli.client import MoLabClient
 from molab_cli.execution import RemoteExecutor
 from molab_cli.jobs import JobManager
+from molab_cli.keepalive import KeepaliveManager
 from molab_cli.sandbox import SandboxSession
 from molab_cli.scheduler import BatchOrchestrator
 from molab_cli.services import ServiceManager
+from molab_cli.snapshots import SnapshotManager
+from molab_cli.storage import StorageBridge
 from molab_cli.transfer import TransferManager
 from molab_cli.workloads import WorkloadRegistry
 
@@ -384,6 +387,122 @@ class MoLabMCPServer:
                     "required": ["notebook_id"],
                 },
             },
+            {
+                "name": "molab_snapshot_create",
+                "description": "Create a compressed snapshot of pod workspace and stream to local persistent storage to prevent data loss on pod timeout/reset.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "name": {"type": "string", "description": "Optional name for checkpoint"},
+                        "remote_path": {"type": "string", "description": "Remote path to archive (default: /workspace)"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_snapshot_restore",
+                "description": "Restore a saved workspace snapshot into the remote pod's /workspace directory.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "snapshot_id": {"type": "string", "description": "Specific snapshot ID (default: latest snapshot)"},
+                        "remote_path": {"type": "string", "description": "Destination directory (default: /workspace)"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_snapshot_list",
+                "description": "List saved workspace snapshots and checkpoints.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Optional notebook ID filter"},
+                        "limit": {"type": "integer", "description": "Max snapshots to return (default: 25)"},
+                    },
+                },
+            },
+            {
+                "name": "molab_keepalive_start",
+                "description": "Start an autonomous background anti-idle heartbeat daemon to keep a Blackwell pod alive and auto-restore workspace upon pod resurrection.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "interval": {"type": "integer", "description": "Heartbeat interval in seconds (default: 120)"},
+                        "max_hours": {"type": "number", "description": "Max runtime in hours (default: unlimited)"},
+                        "auto_restore": {"type": "boolean", "description": "Whether to auto-restore latest snapshot if pod resets (default: true)"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_keepalive_stop",
+                "description": "Stop the background anti-idle keepalive daemon for a pod.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_keepalive_status",
+                "description": "Inspect live status of anti-idle keepalive daemon and session TTL for a pod.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_storage_backup",
+                "description": "Sync pod directory directly to remote cloud storage (S3/R2/B2/GCS) via rclone at multi-gigabit speeds.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "remote_dest": {"type": "string", "description": "Destination remote storage path (e.g. r2:my-bucket/weights)"},
+                        "source_dir": {"type": "string", "description": "Source pod directory (default: /workspace)"},
+                        "flags": {"type": "string", "description": "Additional rclone flags"},
+                    },
+                    "required": ["notebook_id", "remote_dest"],
+                },
+            },
+            {
+                "name": "molab_storage_restore",
+                "description": "Restore pod directory directly from remote cloud storage via rclone at multi-gigabit speeds.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "remote_source": {"type": "string", "description": "Source remote storage path (e.g. r2:my-bucket/weights)"},
+                        "target_dir": {"type": "string", "description": "Destination pod directory (default: /workspace)"},
+                        "flags": {"type": "string", "description": "Additional rclone flags"},
+                    },
+                    "required": ["notebook_id", "remote_source"],
+                },
+            },
+            {
+                "name": "molab_storage_hf_pull",
+                "description": "Download weights/datasets directly from Hugging Face Hub to pod at multi-gigabit speeds.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "repo_id": {"type": "string", "description": "Hugging Face repo ID (e.g. google/gemma-3-27b-it)"},
+                        "dest": {"type": "string", "description": "Destination directory on pod (default: /workspace)"},
+                        "filename": {"type": "string", "description": "Optional specific file to download"},
+                        "token": {"type": "string", "description": "Optional Hugging Face user token"},
+                    },
+                    "required": ["notebook_id", "repo_id"],
+                },
+            },
         ]
 
     def execute_tool(self, name: str, args: Dict[str, Any]) -> Any:
@@ -582,6 +701,71 @@ class MoLabMCPServer:
             session = SandboxSession(args["notebook_id"], client=self.client)
             backend = MarimoBackendClient(session)
             return backend.list_packages()
+
+        elif name == "molab_snapshot_create":
+            sm = SnapshotManager()
+            return sm.create_snapshot(
+                notebook_id=args["notebook_id"],
+                name=args.get("name"),
+                remote_path=args.get("remote_path", "/workspace"),
+            )
+
+        elif name == "molab_snapshot_restore":
+            sm = SnapshotManager()
+            return sm.restore_snapshot(
+                notebook_id=args["notebook_id"],
+                snapshot_id=args.get("snapshot_id"),
+                remote_path=args.get("remote_path", "/workspace"),
+            )
+
+        elif name == "molab_snapshot_list":
+            sm = SnapshotManager()
+            return sm.list_snapshots(
+                notebook_id=args.get("notebook_id"),
+                limit=int(args.get("limit", 25)),
+            )
+
+        elif name == "molab_keepalive_start":
+            km = KeepaliveManager()
+            return km.start_daemon(
+                notebook_id=args["notebook_id"],
+                interval=int(args.get("interval", 120)),
+                max_hours=float(args["max_hours"]) if args.get("max_hours") is not None else None,
+                auto_restore=bool(args.get("auto_restore", True)),
+            )
+
+        elif name == "molab_keepalive_stop":
+            km = KeepaliveManager()
+            return {"success": km.stop_daemon(args["notebook_id"])}
+
+        elif name == "molab_keepalive_status":
+            km = KeepaliveManager()
+            return km.get_status(args["notebook_id"]) or {"status": "none"}
+
+        elif name == "molab_storage_backup":
+            sb = StorageBridge(args["notebook_id"])
+            return sb.rclone_sync_to_cloud(
+                remote_dest=args["remote_dest"],
+                source_dir=args.get("source_dir", "/workspace"),
+                extra_flags=args.get("flags"),
+            )
+
+        elif name == "molab_storage_restore":
+            sb = StorageBridge(args["notebook_id"])
+            return sb.rclone_sync_from_cloud(
+                remote_source=args["remote_source"],
+                target_dir=args.get("target_dir", "/workspace"),
+                extra_flags=args.get("flags"),
+            )
+
+        elif name == "molab_storage_hf_pull":
+            sb = StorageBridge(args["notebook_id"])
+            return sb.hf_download(
+                repo_id=args["repo_id"],
+                dest_dir=args.get("dest", "/workspace"),
+                filename=args.get("filename"),
+                token=args.get("token"),
+            )
 
         raise ValueError(f"Unknown tool: {name}")
 

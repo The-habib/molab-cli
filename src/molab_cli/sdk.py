@@ -10,9 +10,12 @@ from molab_cli.capabilities import discover_capabilities, run_doctor
 from molab_cli.client import MoLabClient
 from molab_cli.execution import ExecutionResult, RemoteExecutor
 from molab_cli.jobs import JobManager
+from molab_cli.keepalive import KeepaliveManager
 from molab_cli.sandbox import SandboxSession
 from molab_cli.scheduler import BatchOrchestrator, ValidationResult
 from molab_cli.services import ServiceManager
+from molab_cli.snapshots import SnapshotManager
+from molab_cli.storage import StorageBridge
 from molab_cli.transfer import TransferManager
 from molab_cli.workloads import WorkloadRegistry
 
@@ -187,6 +190,62 @@ class Pod:
         """Install package via native REST API."""
         return self.backend.add_package(package_name=package_name, upgrade=upgrade)
 
+    # -------------------------------------------------------------------------
+    # Snapshot & Persistence Subsystem
+    # -------------------------------------------------------------------------
+
+    def create_snapshot(
+        self,
+        name: Optional[str] = None,
+        remote_path: str = "/workspace",
+        excludes: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Create a compressed snapshot of pod workspace and save to local storage."""
+        sm = SnapshotManager(self._job_manager.db_path)
+        return sm.create_snapshot(self.notebook_id, name=name, remote_path=remote_path, excludes=excludes)
+
+    def restore_snapshot(
+        self,
+        snapshot_id: Optional[str] = None,
+        remote_path: str = "/workspace",
+    ) -> Dict[str, Any]:
+        """Restore a snapshot into the remote pod's /workspace directory."""
+        sm = SnapshotManager(self._job_manager.db_path)
+        return sm.restore_snapshot(self.notebook_id, snapshot_id=snapshot_id, remote_path=remote_path)
+
+    # -------------------------------------------------------------------------
+    # Keepalive Subsystem
+    # -------------------------------------------------------------------------
+
+    def start_keepalive(
+        self,
+        interval: int = 120,
+        max_hours: Optional[float] = None,
+        auto_restore: bool = True,
+    ) -> Dict[str, Any]:
+        """Start anti-idle background heartbeat daemon."""
+        km = KeepaliveManager(self._job_manager.db_path)
+        return km.start_daemon(self.notebook_id, interval=interval, max_hours=max_hours, auto_restore=auto_restore)
+
+    def stop_keepalive(self) -> bool:
+        """Stop anti-idle keepalive daemon."""
+        km = KeepaliveManager(self._job_manager.db_path)
+        return km.stop_daemon(self.notebook_id)
+
+    def keepalive_status(self) -> Optional[Dict[str, Any]]:
+        """Inspect keepalive daemon status."""
+        km = KeepaliveManager(self._job_manager.db_path)
+        return km.get_status(self.notebook_id)
+
+    # -------------------------------------------------------------------------
+    # Cloud Storage Bridge Subsystem
+    # -------------------------------------------------------------------------
+
+    @property
+    def storage(self) -> StorageBridge:
+        """Access pod cloud storage bridge (rclone, Hugging Face, git)."""
+        return StorageBridge(self.session)
+
 
 class MoLabSDK:
     """Unified Python SDK entry point for MoLab orchestration."""
@@ -194,6 +253,8 @@ class MoLabSDK:
     def __init__(self, client: Optional[MoLabClient] = None, db_path: Optional[str] = None):
         self.client = client or MoLabClient()
         self.job_manager = JobManager(db_path=db_path)
+        self.snapshot_manager = SnapshotManager(db_path=db_path)
+        self.keepalive_manager = KeepaliveManager(db_path=db_path)
         self.workload_registry = WorkloadRegistry()
         self.orchestrator = BatchOrchestrator(
             client=self.client,
@@ -293,4 +354,16 @@ class MoLabSDK:
     def retry_batch(self, batch_id: str) -> Dict[str, Any]:
         """Retry failed or skipped tasks in a batch."""
         return self.orchestrator.job_manager.retry_batch(batch_id)
+
+    # -------------------------------------------------------------------------
+    # Snapshot & Keepalive Platform Querying
+    # -------------------------------------------------------------------------
+
+    def list_snapshots(self, notebook_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """List saved workspace snapshots."""
+        return self.snapshot_manager.list_snapshots(notebook_id=notebook_id, limit=limit)
+
+    def list_keepalives(self) -> List[Dict[str, Any]]:
+        """List all active or historic keepalive daemons."""
+        return self.keepalive_manager.list_keepalives()
 

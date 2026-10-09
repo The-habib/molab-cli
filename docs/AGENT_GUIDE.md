@@ -163,7 +163,32 @@ print("Pipeline status:", result["status"])
 
 ---
 
-## 4. Extensibility Mandate
+## 4. Anti-Idle Keepalive & Auto-Persistence Protocol
+
+Whenever an autonomous agent starts a long-running workload or works on a pod across multiple tasks:
+
+1. **Activate Keepalive Immediately:**
+   ```python
+   pod = sdk.get_free_pod()
+   pod.start_keepalive(interval=120, auto_restore=True)
+   ```
+   This prevents the 30-minute idle reaper from terminating your session or recycling your container while you analyze outputs or wait for tasks.
+
+2. **Checkpoint Workspace Before Heavy Transformations:**
+   ```python
+   pod.create_snapshot(name="pre-job-checkpoint")
+   ```
+   If the container ever reboots due to cloud maintenance, the keepalive daemon automatically detects that `sandbox_id` changed and immediately restores the latest snapshot!
+
+3. **Multi-Gigabit Cloud Persistence via Pod Tools:**
+   ```python
+   # Sync /workspace to R2/S3 at 10Gbps+ without routing through mobile phone:
+   pod.storage.rclone_sync_to_cloud("r2:bucket/weights")
+   ```
+
+---
+
+## 5. Extensibility Mandate
 
 `molab-cli` is stored at `~/molab-cli/` in editable mode.
 If you need additional flags, custom streaming logic, or specialized diagnostic tools:
