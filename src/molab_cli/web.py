@@ -5,11 +5,12 @@ Serves a responsive, OLED dark-mode single-page application on localhost.
 
 import json
 import os
+import re
 import sys
 import webbrowser
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
@@ -22,7 +23,7 @@ from molab_cli.keepalive import KeepaliveManager
 from molab_cli.sandbox import SandboxSession
 from molab_cli.vault import MoLabVault
 
-app = FastAPI(title="MoLab Cloud GPU Dashboard", version="2.3.1")
+app = FastAPI(title="MoLab Cloud GPU Dashboard", version="2.4.0")
 
 
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -501,6 +502,23 @@ def api_status():
     }
 
 
+def _validate_request_and_notebook(request: Request, notebook_id: str) -> str:
+    """Validate cross-origin requests and sanitize notebook identifier."""
+    origin = request.headers.get("origin")
+    referer = request.headers.get("referer")
+    for header_val in [origin, referer]:
+        if header_val:
+            from urllib.parse import urlparse
+            parsed = urlparse(header_val)
+            if parsed.hostname not in ("127.0.0.1", "localhost", "0.0.0.0", "testserver"):
+                raise HTTPException(status_code=403, detail="Cross-origin requests forbidden.")
+
+    clean_id = notebook_id if notebook_id.startswith("nb_") else f"nb_{notebook_id}"
+    if not re.match(r"^nb_[a-zA-Z0-9_-]+$", clean_id):
+        raise HTTPException(status_code=400, detail="Invalid notebook ID format.")
+    return clean_id
+
+
 @app.get("/api/pods")
 def api_pods():
     """List all running pods with hardware and occupancy telemetry."""
@@ -512,53 +530,75 @@ def api_pods():
     for nb_id, sb_info in running_sandboxes.items():
         nb_meta = notebooks.get(nb_id, {})
         vram_used = 0.0
-        is_free = True
+        is_free = False
+        pod_status = "UNKNOWN"
+        error_msg = None
         try:
             sess = SandboxSession(nb_id, client=client)
             wl = sess.get_workload_status()
-            is_free = not wl.get("is_occupied", False)
+            is_occupied = wl.get("is_occupied", False)
+            is_free = not is_occupied
             vram_used = wl.get("gpu_allocated_gb", 0.0)
-        except Exception:
-            pass
+            pod_status = "BUSY" if is_occupied else "READY"
+        except Exception as e:
+            is_free = False
+            pod_status = "UNAVAILABLE"
+            error_msg = str(e)
 
         sandbox_id = sb_info if isinstance(sb_info, str) else sb_info.get("sandbox_id", "")
-        result.append({
+        pod_data = {
             "id": nb_id,
             "title": nb_meta.get("title", "Untitled Pod"),
             "sandbox_id": sandbox_id,
             "gpu": nb_meta.get("gpu", "rtxp6000"),
+            "status": pod_status,
             "is_free": is_free,
             "vram_used_gb": vram_used,
-        })
+        }
+        if error_msg:
+            pod_data["error"] = error_msg
+        result.append(pod_data)
 
     return result
 
 
 @app.post("/api/pods/{notebook_id}/permanent")
-def api_pod_permanent(notebook_id: str):
+def api_pod_permanent(notebook_id: str, request: Request):
     """Arm 100% on-MoLab permanence mode."""
-    from molab_cli.keepalive import KeepaliveManager
-    km = KeepaliveManager()
-    daemon_info = km.start_daemon(notebook_id=notebook_id, auto_restore=True)
-    return {"status": "ARMED", "daemon": daemon_info}
+    clean_id = _validate_request_and_notebook(request, notebook_id)
+    try:
+        from molab_cli.keepalive import KeepaliveManager
+        km = KeepaliveManager()
+        daemon_info = km.start_daemon(notebook_id=clean_id, auto_restore=True)
+        return {"status": "ARMED", "daemon": daemon_info}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to arm permanence daemon: {e}")
 
 
 @app.post("/api/pods/{notebook_id}/vault_pack")
-def api_vault_pack(notebook_id: str):
+def api_vault_pack(notebook_id: str, request: Request):
     """Pack /workspace into in-notebook vault."""
-    sess = SandboxSession(notebook_id)
-    vault = MoLabVault(sess)
-    res = vault.pack_workspace()
-    return res
+    clean_id = _validate_request_and_notebook(request, notebook_id)
+    try:
+        sess = SandboxSession(clean_id)
+        vault = MoLabVault(sess)
+        res = vault.pack_workspace()
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to pack vault: {e}")
 
 
 @app.post("/api/pods/{notebook_id}/vault_unpack")
-def api_vault_unpack(notebook_id: str):
+def api_vault_unpack(notebook_id: str, request: Request):
     """Unpack in-notebook vault back into /workspace."""
-    sess = SandboxSession(notebook_id)
-    vault = MoLabVault(sess)
-    res = vault.unpack_workspace()
-    return res
+    clean_id = _validate_request_and_notebook(request, notebook_id)
+    try:
+        sess = SandboxSession(clean_id)
+        vault = MoLabVault(sess)
+        res = vault.unpack_workspace()
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to unpack vault: {e}")
 
 
 @app.get("/api/gallery")
@@ -581,7 +621,7 @@ def api_jobs():
 def api_job_logs(job_id: str):
     """Fetch trailing logs for a job."""
     jm = JobManager()
-    logs = jm.get_job_logs(job_id, lines=50)
+    logs = jm.get_job_logs(job_id, tail_lines=50)
     return {"logs": logs}
 
 

@@ -55,7 +55,7 @@ def reconstruct_script(nb_id: str, title: str, cells: list) -> str:
 
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="2.3.1", prog_name="molab")
+@click.version_option(version="2.4.0", prog_name="molab")
 @click.pass_context
 def cli(ctx):
     """molab: Modern interactive CLI & cloud orchestrator for MoLab with NVIDIA Blackwell GPU support."""
@@ -2297,14 +2297,18 @@ def cmd_storage_rclone_config(notebook_id: str, config_path: Optional[str]):
 @click.argument("remote_dest")
 @click.option("--source-dir", default="/workspace", help="Pod directory to sync (default: /workspace)")
 @click.option("--flags", default=None, help="Additional rclone flags")
-def cmd_storage_rclone_backup(notebook_id: str, remote_dest: str, source_dir: str, flags: Optional[str]):
+@click.option("--destructive", is_flag=True, default=False, help="Enable destructive sync (deletes destination files)")
+@click.option("--delete", "delete_dest", is_flag=True, default=False, help="Alias for --destructive")
+def cmd_storage_rclone_backup(notebook_id: str, remote_dest: str, source_dir: str, flags: Optional[str], destructive: bool, delete_dest: bool):
     """Sync pod /workspace directly to remote cloud bucket (S3/R2/B2/GCS) at 10Gbps+."""
     from molab_cli.storage import StorageBridge
     sb = StorageBridge(notebook_id)
-    with console.status(f"[bold cyan]Backing up {source_dir} to {remote_dest} via rclone...[/bold cyan]"):
+    is_dest = destructive or delete_dest
+    action_desc = "Syncing (destructive)" if is_dest else "Copying (non-destructive)"
+    with console.status(f"[bold cyan]{action_desc} {source_dir} to {remote_dest} via rclone...[/bold cyan]"):
         try:
-            res = sb.rclone_sync_to_cloud(remote_dest=remote_dest, source_dir=source_dir, extra_flags=flags)
-            console.print(f"[bold green]✔ Cloud backup completed:[/bold green]\n{res['output']}")
+            res = sb.rclone_sync_to_cloud(remote_dest=remote_dest, source_dir=source_dir, extra_flags=flags, destructive=is_dest)
+            console.print(f"[bold green]✔ Cloud backup completed ({res['operation']}):[/bold green]\n{res['output']}")
         except Exception as e:
             console.print(f"[red]Backup failed:[/red] {e}")
 
@@ -2314,14 +2318,18 @@ def cmd_storage_rclone_backup(notebook_id: str, remote_dest: str, source_dir: st
 @click.argument("remote_source")
 @click.option("--target-dir", default="/workspace", help="Pod directory to unpack into (default: /workspace)")
 @click.option("--flags", default=None, help="Additional rclone flags")
-def cmd_storage_rclone_restore(notebook_id: str, remote_source: str, target_dir: str, flags: Optional[str]):
+@click.option("--destructive", is_flag=True, default=False, help="Enable destructive sync (deletes destination files)")
+@click.option("--delete", "delete_dest", is_flag=True, default=False, help="Alias for --destructive")
+def cmd_storage_rclone_restore(notebook_id: str, remote_source: str, target_dir: str, flags: Optional[str], destructive: bool, delete_dest: bool):
     """Restore pod /workspace directly from remote cloud bucket at 10Gbps+."""
     from molab_cli.storage import StorageBridge
     sb = StorageBridge(notebook_id)
-    with console.status(f"[bold cyan]Restoring from {remote_source} to {target_dir} via rclone...[/bold cyan]"):
+    is_dest = destructive or delete_dest
+    action_desc = "Syncing (destructive)" if is_dest else "Copying (non-destructive)"
+    with console.status(f"[bold cyan]{action_desc} from {remote_source} to {target_dir} via rclone...[/bold cyan]"):
         try:
-            res = sb.rclone_sync_from_cloud(remote_source=remote_source, target_dir=target_dir, extra_flags=flags)
-            console.print(f"[bold green]✔ Cloud restore completed:[/bold green]\n{res['output']}")
+            res = sb.rclone_sync_from_cloud(remote_source=remote_source, target_dir=target_dir, extra_flags=flags, destructive=is_dest)
+            console.print(f"[bold green]✔ Cloud restore completed ({res['operation']}):[/bold green]\n{res['output']}")
         except Exception as e:
             console.print(f"[red]Restore failed:[/red] {e}")
 
@@ -2407,7 +2415,7 @@ def cmd_permanent(notebook_id: Optional[str], interval: int, auto_pack: bool, as
             if not running:
                 console.print("[red]No running pods found.[/red]")
                 return
-            target_nb = running[0]["notebook_id"]
+            target_nb = list(running.keys())[0]
 
     target_nb = target_nb if target_nb.startswith("nb_") else f"nb_{target_nb}"
 
@@ -2538,22 +2546,26 @@ def cmd_vault_pack(notebook_id: str, source_dir: str, max_size: float, as_json: 
 @vault_group.command("unpack")
 @click.argument("notebook_id")
 @click.option("--target-dir", default="/workspace", help="Target pod directory (default: /workspace)")
+@click.option("--overwrite/--no-overwrite", default=True, help="Overwrite conflicting files on unpack (default: True)")
 @click.option("--as-json", is_flag=True)
-def cmd_vault_unpack(notebook_id: str, target_dir: str, as_json: bool):
+def cmd_vault_unpack(notebook_id: str, target_dir: str, overwrite: bool, as_json: bool):
     """Extract files from in-notebook vault directly into pod workspace."""
     from molab_cli.vault import MoLabVault
     vault = MoLabVault(notebook_id)
     with console.status(f"[bold cyan]Unpacking in-notebook vault into {target_dir}...[/bold cyan]"):
         try:
-            res = vault.unpack_workspace(target_dir=target_dir)
+            res = vault.unpack_workspace(target_dir=target_dir, overwrite=overwrite)
             if as_json:
                 console.print(json.dumps(res, indent=2))
             else:
-                console.print(
+                msg = (
                     f"[bold green]✔ Vault successfully unpacked into {target_dir}![/bold green]\n"
                     f"Files restored: [bold white]{res['files_unpacked']}[/bold white] | "
                     f"Archive size: [bold cyan]{res['archive_bytes']:,} bytes[/bold cyan]"
                 )
+                if res.get("files_skipped", 0) > 0:
+                    msg += f"\n[yellow]Preserved {res['files_skipped']} existing files: {', '.join(res.get('conflicts', []))}[/yellow]"
+                console.print(msg)
         except Exception as e:
             console.print(f"[red]Failed to unpack vault:[/red] {e}")
 
@@ -2603,7 +2615,7 @@ def cmd_remote_env(notebook_id: Optional[str], as_json: bool):
         if not running:
             console.print("[red]No running pods found.[/red]")
             return
-        target_nb = running[0]["notebook_id"]
+        target_nb = list(running.keys())[0]
 
     target_nb = target_nb if target_nb.startswith("nb_") else f"nb_{target_nb}"
     session = SandboxSession(target_nb)

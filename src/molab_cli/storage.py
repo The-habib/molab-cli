@@ -9,6 +9,7 @@ import shlex
 from typing import Any, Dict, List, Optional
 
 from molab_cli.exceptions import MoLabError
+from molab_cli.notifications import redact_sensitive_data
 from molab_cli.sandbox import SandboxSession
 
 
@@ -28,9 +29,19 @@ class StorageBridge:
         else:
             self.session = session_or_notebook_id
 
+    def _sanitize_rclone_flags(self, extra_flags: Optional[str]) -> str:
+        if not extra_flags:
+            return "-v --transfers 8 --checkers 16"
+        for char in [";", "&", "|", "`", "$", "\n", "\r", ">", "<"]:
+            if char in extra_flags:
+                raise StorageBridgeError(f"Forbidden characters detected in rclone flags: {char}")
+        parts = shlex.split(extra_flags)
+        return " ".join(shlex.quote(p) for p in parts)
+
     def setup_rclone_config(self, local_config_path: Optional[str] = None) -> bool:
         """
         Upload local rclone configuration file (~/.config/rclone/rclone.conf) to the pod.
+        Ensures restrictive file permissions (chmod 600) on the pod to protect credentials.
         """
         config_path = local_config_path or os.path.expanduser("~/.config/rclone/rclone.conf")
         if not os.path.exists(config_path):
@@ -42,6 +53,7 @@ class StorageBridge:
         self.session.resolve()
         self.session.execute_command("mkdir -p /root/.config/rclone")
         self.session.push_file(config_path, "/root/.config/rclone/rclone.conf")
+        self.session.execute_command("chmod 600 /root/.config/rclone/rclone.conf")
         return True
 
     def rclone_sync_to_cloud(
@@ -49,20 +61,26 @@ class StorageBridge:
         remote_dest: str,
         source_dir: str = "/workspace",
         extra_flags: Optional[str] = None,
+        destructive: bool = False,
         timeout: float = 300.0,
     ) -> Dict[str, Any]:
         """
-        Sync pod directory directly to remote cloud storage (S3/R2/B2/GCS) via rclone.
+        Transfer pod directory to remote cloud storage (S3/R2/B2/GCS) via rclone.
+        Non-destructive by default using 'rclone copy' to prevent accidental deletion
+        of remote data. Pass destructive=True to use 'rclone sync'.
         """
         self.session.resolve()
-        flags = extra_flags or "-v --transfers 8 --checkers 16"
-        cmd = f"rclone sync {shlex.quote(source_dir)} {shlex.quote(remote_dest)} {flags}"
+        flags = self._sanitize_rclone_flags(extra_flags)
+        subcmd = "sync" if destructive else "copy"
+        cmd = f"rclone {subcmd} {shlex.quote(source_dir)} {shlex.quote(remote_dest)} {flags}"
         output = self.session.execute_command(cmd, timeout=timeout)
         return {
             "notebook_id": self.session.notebook_id,
             "source_dir": source_dir,
             "remote_dest": remote_dest,
-            "output": output,
+            "destructive": destructive,
+            "operation": subcmd,
+            "output": redact_sensitive_data(output),
         }
 
     def rclone_sync_from_cloud(
@@ -70,20 +88,26 @@ class StorageBridge:
         remote_source: str,
         target_dir: str = "/workspace",
         extra_flags: Optional[str] = None,
+        destructive: bool = False,
         timeout: float = 300.0,
     ) -> Dict[str, Any]:
         """
-        Restore pod directory directly from remote cloud storage via rclone.
+        Restore pod directory from remote cloud storage via rclone.
+        Non-destructive by default using 'rclone copy' to protect existing pod files.
+        Pass destructive=True to use 'rclone sync'.
         """
         self.session.resolve()
-        flags = extra_flags or "-v --transfers 8 --checkers 16"
-        cmd = f"mkdir -p {shlex.quote(target_dir)} && rclone sync {shlex.quote(remote_source)} {shlex.quote(target_dir)} {flags}"
+        flags = self._sanitize_rclone_flags(extra_flags)
+        subcmd = "sync" if destructive else "copy"
+        cmd = f"mkdir -p {shlex.quote(target_dir)} && rclone {subcmd} {shlex.quote(remote_source)} {shlex.quote(target_dir)} {flags}"
         output = self.session.execute_command(cmd, timeout=timeout)
         return {
             "notebook_id": self.session.notebook_id,
             "remote_source": remote_source,
             "target_dir": target_dir,
-            "output": output,
+            "destructive": destructive,
+            "operation": subcmd,
+            "output": redact_sensitive_data(output),
         }
 
     def hf_download(
@@ -96,21 +120,28 @@ class StorageBridge:
     ) -> Dict[str, Any]:
         """
         Download models or datasets directly from Hugging Face Hub to pod /workspace.
+        Uses HF_TOKEN environment variable to avoid token exposure in command arguments.
         """
         self.session.resolve()
         cmd_parts = ["huggingface-cli", "download", shlex.quote(repo_id), "--local-dir", shlex.quote(dest_dir)]
         if filename:
             cmd_parts.extend(["--include", shlex.quote(filename)])
-        if token:
-            cmd_parts.extend(["--token", shlex.quote(token)])
 
-        cmd = " ".join(cmd_parts)
+        if token:
+            cmd = f"HF_TOKEN={shlex.quote(token)} " + " ".join(cmd_parts)
+        else:
+            cmd = " ".join(cmd_parts)
+
         output = self.session.execute_command(cmd, timeout=timeout)
+        cleaned_output = redact_sensitive_data(output)
+        if token:
+            cleaned_output = cleaned_output.replace(token, "[REDACTED]")
+
         return {
             "notebook_id": self.session.notebook_id,
             "repo_id": repo_id,
             "dest_dir": dest_dir,
-            "output": output,
+            "output": cleaned_output,
         }
 
     def hf_upload(
@@ -123,6 +154,7 @@ class StorageBridge:
     ) -> Dict[str, Any]:
         """
         Upload weights or outputs directly from pod to Hugging Face Hub.
+        Uses HF_TOKEN environment variable to avoid token exposure in command arguments.
         """
         self.session.resolve()
         cmd_parts = [
@@ -133,16 +165,22 @@ class StorageBridge:
             "--repo-type",
             shlex.quote(repo_type),
         ]
-        if token:
-            cmd_parts.extend(["--token", shlex.quote(token)])
 
-        cmd = " ".join(cmd_parts)
+        if token:
+            cmd = f"HF_TOKEN={shlex.quote(token)} " + " ".join(cmd_parts)
+        else:
+            cmd = " ".join(cmd_parts)
+
         output = self.session.execute_command(cmd, timeout=timeout)
+        cleaned_output = redact_sensitive_data(output)
+        if token:
+            cleaned_output = cleaned_output.replace(token, "[REDACTED]")
+
         return {
             "notebook_id": self.session.notebook_id,
             "repo_id": repo_id,
             "local_pod_path": local_pod_path,
-            "output": output,
+            "output": cleaned_output,
         }
 
     def git_clone(

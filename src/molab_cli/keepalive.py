@@ -36,6 +36,30 @@ def get_keepalive_log_path(notebook_id: str) -> str:
     return os.path.join(config_dir, f"keepalive_{clean_id}.log")
 
 
+def is_keepalive_process(pid: int, notebook_id: Optional[str] = None) -> bool:
+    """Verify if process with given PID is actually a running molab keepalive daemon."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+
+    cmdline_path = f"/proc/{pid}/cmdline"
+    if not os.path.exists(cmdline_path):
+        return True
+
+    try:
+        with open(cmdline_path, "rb") as f:
+            raw = f.read()
+            cmdline = raw.decode("utf-8", errors="ignore").replace("\x00", " ")
+        if ("python" in cmdline or "molab" in cmdline) and ("keepalive" in cmdline or "molab_cli" in cmdline):
+            return True
+        return False
+    except (OSError, IOError):
+        return True
+
+
 class KeepaliveError(MoLabError):
     """Raised when keepalive operation fails."""
 
@@ -180,17 +204,18 @@ class KeepaliveManager:
 
         pid = status.get("pid")
         if pid:
-            try:
-                os.kill(pid, signal.SIGTERM)
-                time.sleep(0.5)
-                # Verify termination; send SIGKILL if still active
+            if is_keepalive_process(pid, nb_id):
                 try:
-                    os.kill(pid, 0)
-                    os.kill(pid, signal.SIGKILL)
+                    os.kill(pid, signal.SIGTERM)
+                    time.sleep(0.5)
+                    # Verify termination; send SIGKILL if still active
+                    try:
+                        os.kill(pid, 0)
+                        os.kill(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
                 except OSError:
                     pass
-            except OSError:
-                pass
 
         with self._get_conn() as conn:
             conn.execute(
@@ -200,7 +225,7 @@ class KeepaliveManager:
         return True
 
     def get_status(self, notebook_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch current keepalive status, verifying live process existence."""
+        """Fetch current keepalive status, verifying live process existence and identity."""
         nb_id = notebook_id if notebook_id.startswith("nb_") else f"nb_{notebook_id}"
         with self._get_conn() as conn:
             cur = conn.execute("SELECT * FROM keepalives WHERE notebook_id = ?", (nb_id,))
@@ -211,13 +236,8 @@ class KeepaliveManager:
 
         pid = res.get("pid")
         if res.get("status") == "running" and pid:
-            # Check if process is actually running
-            is_alive = False
-            try:
-                os.kill(pid, 0)
-                is_alive = True
-            except OSError:
-                is_alive = False
+            # Check if process is actually running and belongs to keepalive daemon
+            is_alive = is_keepalive_process(pid, nb_id)
 
             if not is_alive:
                 res["status"] = "stopped"
@@ -238,9 +258,7 @@ class KeepaliveManager:
         # Refresh live statuses
         for item in rows:
             if item.get("status") == "running" and item.get("pid"):
-                try:
-                    os.kill(item["pid"], 0)
-                except OSError:
+                if not is_keepalive_process(item["pid"], item.get("notebook_id")):
                     item["status"] = "stopped"
         return rows
 

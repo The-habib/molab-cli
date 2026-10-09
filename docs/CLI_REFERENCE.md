@@ -555,16 +555,16 @@ Capture compressed archives of pod `/workspace`, stream them to local persistent
 
 ---
 
-## 12. Multi-Gigabit Cloud Storage Bridge (v2.3)
+## 12. Multi-Gigabit Cloud Storage Bridge (v2.4)
 
 ### `molab storage <subcommand> <notebook_id> [args]`
 Leverage pod pre-installed tools (`rclone`, `huggingface-cli`, `git`) for multi-gigabit transfers directly between cloud storage and pod `/workspace`.
 
 * **Subcommands:**
-  * `rclone-config <id>`: Push local `~/.config/rclone/rclone.conf` to pod (`--config <path>`).
-  * `rclone-backup <id> <remote_dest>`: Sync `/workspace` directly to remote bucket (`--source-dir <dir>`, `--flags <flags>`).
-  * `rclone-restore <id> <remote_source>`: Restore `/workspace` directly from remote bucket (`--target-dir <dir>`, `--flags <flags>`).
-  * `hf-pull <id> <repo_id>`: Download weights/datasets from Hugging Face Hub (`--dest <dir>`, `--filename <file>`, `--token <tok>`).
+  * `rclone-config <id>`: Push local `~/.config/rclone/rclone.conf` to pod (`--config <path>`). Restricts permissions (`chmod 600`) to protect secrets.
+  * `rclone-backup <id> <remote_dest>`: Non-destructive copy of `/workspace` directly to remote bucket using `rclone copy` (`--source-dir <dir>`, `--flags <flags>`). Pass `--destructive` or `--delete` to prune files.
+  * `rclone-restore <id> <remote_source>`: Non-destructive restore from remote bucket into `/workspace` using `rclone copy` (`--target-dir <dir>`, `--flags <flags>`). Pass `--destructive` or `--delete` to prune files.
+  * `hf-pull <id> <repo_id>`: Download weights/datasets from Hugging Face Hub using `HF_TOKEN` environment variable (`--dest <dir>`, `--filename <file>`, `--token <tok>`).
   * `hf-push <id> <local_path> <repo_id>`: Upload model weights to Hugging Face Hub (`--type <model|dataset>`, `--token <tok>`).
   * `git-clone <id> <repo_url>`: Clone git repo onto pod (`--dest <dir>`, `--branch <branch>`).
 
@@ -573,8 +573,11 @@ Leverage pod pre-installed tools (`rclone`, `huggingface-cli`, `git`) for multi-
   # Upload rclone config:
   molab storage rclone-config nb_xxx
 
-  # Sync workspace to Cloudflare R2 at 10Gbps+:
+  # Non-destructive copy of workspace to Cloudflare R2 at 10Gbps+:
   molab storage rclone-backup nb_xxx r2:my-bucket/weights
+
+  # Explicitly sync (destructive prune):
+  molab storage rclone-backup nb_xxx r2:my-bucket/weights --destructive
 
   # Pull model from Hugging Face Hub:
   molab storage hf-pull nb_xxx meta-llama/Llama-3-8b --dest /workspace/llama3
@@ -582,7 +585,7 @@ Leverage pod pre-installed tools (`rclone`, `huggingface-cli`, `git`) for multi-
 
 ---
 
-## 13. Infinite Pod Permanence Engine (v2.3)
+## 13. Infinite Pod Permanence Engine (v2.4)
 
 ### `molab permanent [notebook_id]`
 Transform a Blackwell GPU pod into an infinite, permanently online machine that defeats both the 30-minute idle reaper and container resets.
@@ -607,14 +610,14 @@ Transform a Blackwell GPU pod into an infinite, permanently online machine that 
 
 ---
 
-## 14. 100% On-MoLab Storage Vault (v2.3)
+## 14. 100% On-MoLab Storage Vault (v2.4)
 
 ### `molab vault <subcommand> <notebook_id> [args]`
 Permanent workspace persistence stored directly inside `/marimo/notebook.py` metadata in MoLab's cloud database. **Zero phone storage and zero third-party cloud accounts required.**
 
 * **Subcommands:**
-  * `pack <id>`: Compress pod `/workspace` into self-extracting Marimo cell (`--source-dir <dir>`, `--max-size <mb>`, `-j, --json`).
-  * `unpack <id>`: Extract stored vault archive directly into `/workspace` (`--target-dir <dir>`, `-j, --json`).
+  * `pack <id>`: Compress pod `/workspace` into self-extracting Marimo cell (`--source-dir <dir>`, `--max-size <mb>`, `-j, --json`). Features atomic temporary notebook writes and path escaping.
+  * `unpack <id>`: Extract stored vault archive directly into `/workspace` (`--target-dir <dir>`, `--overwrite / --no-overwrite`, `-j, --json`). Enforces ZipSlip/traversal guards, symlink checks, and conflict reporting.
   * `inspect <id>`: Check if notebook contains an active vault and report size (`-j, --json`).
 * **Example:**
   ```bash

@@ -105,6 +105,10 @@ class JobManager:
                     attempts INTEGER DEFAULT 0,
                     max_attempts INTEGER DEFAULT 1,
                     idempotent INTEGER DEFAULT 1,
+                    claimed_by TEXT,
+                    claimed_at REAL,
+                    lease_expires_at REAL,
+                    timeout_seconds REAL,
                     created_at REAL,
                     started_at REAL,
                     completed_at REAL,
@@ -113,6 +117,22 @@ class JobManager:
                     FOREIGN KEY(batch_id) REFERENCES batches(id)
                 )
             """)
+            # Schema migration for existing databases
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(batch_tasks)")
+            cols = {row[1] for row in cur.fetchall()}
+            for col_name, col_type in [
+                ("claimed_by", "TEXT"),
+                ("claimed_at", "REAL"),
+                ("lease_expires_at", "REAL"),
+                ("timeout_seconds", "REAL"),
+            ]:
+                if col_name not in cols:
+                    try:
+                        conn.execute(f"ALTER TABLE batch_tasks ADD COLUMN {col_name} {col_type}")
+                    except Exception:
+                        pass
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS notifications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -296,24 +316,38 @@ class JobManager:
         return job
 
     def cancel_job(self, job_id: str) -> Dict[str, Any]:
-        """Terminate a running remote job."""
+        """Terminate a running remote job and reflect true remote confirmation status."""
         job = self.get_job(job_id)
         if job["status"] not in ("RUNNING", "PENDING"):
             return job
 
         session = SandboxSession(job["notebook_id"])
+        cancellation_status = "CANCELLED"
+        error_msg = "Job was cancelled by user."
+
         try:
             session.resolve()
             executor = RemoteExecutor(session)
             executor.kill_process(job["remote_pid"], signal=15)
-        except Exception:
-            pass
+            # Verify termination
+            if executor.is_process_running(job["remote_pid"]) is True:
+                executor.kill_process(job["remote_pid"], signal=9)
+                if executor.is_process_running(job["remote_pid"]) is True:
+                    cancellation_status = "CANCEL_FAILED"
+                    error_msg = f"Failed to terminate remote PID {job['remote_pid']}."
+                else:
+                    cancellation_status = "CANCELLED"
+            else:
+                cancellation_status = "CANCELLED"
+        except Exception as e:
+            cancellation_status = "CANCEL_UNKNOWN"
+            error_msg = f"Remote pod was unreachable during cancellation: {e}"
 
         now = time.time()
         self._update_job_status(
             job_id,
-            status="CANCELLED",
-            error_message="Job was cancelled by user.",
+            status=cancellation_status,
+            error_message=error_msg,
             completed_at=now,
         )
         return self.get_job(job_id)
@@ -661,6 +695,37 @@ class JobManager:
             conn.execute(query, params)
             conn.commit()
 
+    def claim_batch_task(
+        self,
+        task_id: str,
+        worker_id: str,
+        lease_seconds: float = 60.0,
+    ) -> bool:
+        """
+        Atomically claim a READY task using an SQLite transactional lease.
+        Prevents multiple scheduler workers from claiming or executing the same task.
+        """
+        now = time.time()
+        lease_expires = now + lease_seconds
+        with self._get_conn() as conn:
+            cur = conn.execute(
+                """
+                UPDATE batch_tasks
+                SET status = 'RUNNING',
+                    claimed_by = ?,
+                    claimed_at = ?,
+                    lease_expires_at = ?
+                WHERE id = ?
+                  AND (
+                      status = 'READY'
+                      OR (status = 'RUNNING' AND (lease_expires_at IS NOT NULL AND lease_expires_at < ?))
+                  )
+                """,
+                (worker_id, now, lease_expires, task_id, now),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
     def cancel_batch(self, batch_id: str) -> Dict[str, Any]:
         """Cancel a running batch and terminate active remote processes."""
         batch = self.get_batch(batch_id)
@@ -702,7 +767,8 @@ class JobManager:
             conn.execute("""
                 UPDATE batch_tasks
                 SET status = 'PENDING', exit_code = NULL, error_message = NULL,
-                    job_id = NULL, assigned_pod = NULL, completed_at = NULL
+                    job_id = NULL, assigned_pod = NULL, completed_at = NULL,
+                    claimed_by = NULL, claimed_at = NULL, lease_expires_at = NULL
                 WHERE batch_id = ? AND status IN ('FAILED', 'SKIPPED')
             """, (batch_id,))
 
@@ -724,7 +790,10 @@ class JobManager:
         status: str,
         error_message: Optional[str] = None,
     ) -> None:
-        """Record an outbound notification event."""
+        """Record an outbound notification event with credentials and secrets masked."""
+        from molab_cli.notifications import mask_webhook_url, redact_sensitive_data
+        safe_url = mask_webhook_url(webhook_url)
+        safe_payload = redact_sensitive_data(payload)
         now = time.time()
         with self._get_conn() as conn:
             conn.execute("""
@@ -735,8 +804,8 @@ class JobManager:
             """, (
                 batch_id,
                 event_type,
-                webhook_url,
-                json.dumps(payload),
+                safe_url,
+                json.dumps(safe_payload),
                 status,
                 1,
                 now,

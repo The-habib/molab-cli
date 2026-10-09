@@ -120,3 +120,20 @@ def test_keepalive_run_loop_restart_detection(temp_db):
 
     # Verify auto-restore was invoked
     assert mock_snap_mgr.restore_snapshot.called
+
+
+def test_is_keepalive_process_validation():
+    from molab_cli.keepalive import is_keepalive_process
+    from unittest.mock import mock_open
+
+    # Non-keepalive alien process
+    with patch("os.kill", return_value=None), \
+         patch("os.path.exists", return_value=True), \
+         patch("builtins.open", mock_open(read_data=b"/usr/bin/redis-server\x00")):
+        assert is_keepalive_process(1234, "nb_test") is False
+
+    # Valid molab keepalive process
+    with patch("os.kill", return_value=None), \
+         patch("os.path.exists", return_value=True), \
+         patch("builtins.open", mock_open(read_data=b"python3\x00-m\x00molab_cli.cli\x00keepalive\x00run\x00nb_test\x00")):
+        assert is_keepalive_process(1234, "nb_test") is True

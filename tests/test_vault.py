@@ -72,3 +72,29 @@ def test_vault_inspect_absent():
 
         res = vault.inspect_vault()
         assert res["has_vault"] is False
+
+
+def test_vault_unpack_result_json_with_conflicts():
+    vault = MoLabVault("nb_test_123")
+    json_out = 'RESULT_JSON:{"status": "SUCCESS", "files_unpacked": 8, "archive_bytes": 2048, "conflicts": ["model.pt", "config.json"], "conflicts_count": 2, "files_skipped": 2}'
+    with patch.object(vault.session, "resolve"), \
+         patch.object(vault.session, "execute_command", return_value=json_out):
+
+        res = vault.unpack_workspace(target_dir="/workspace", overwrite=False)
+        assert res["notebook_id"] == "nb_test_123"
+        assert res["status"] == "unpacked"
+        assert res["files_unpacked"] == 8
+        assert res["conflicts"] == ["model.pt", "config.json"]
+        assert res["conflicts_count"] == 2
+        assert res["files_skipped"] == 2
+
+
+def test_vault_unpack_corrupt_payload():
+    vault = MoLabVault("nb_test_123")
+    with patch.object(vault.session, "resolve"), \
+         patch.object(vault.session, "execute_command", return_value="CORRUPT_VAULT:Incorrect padding"):
+
+        with pytest.raises(VaultError) as exc_info:
+            vault.unpack_workspace()
+        assert "corrupted" in str(exc_info.value)
+

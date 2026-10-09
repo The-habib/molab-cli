@@ -12,7 +12,7 @@ def test_cli_version():
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
     assert "molab" in result.output
-    assert "2.3.1" in result.output
+    assert "2.4.0" in result.output
 
 
 def test_cli_help():

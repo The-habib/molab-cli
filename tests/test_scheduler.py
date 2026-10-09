@@ -178,3 +178,45 @@ def test_scheduler_select_pod():
     chosen, evals = scheduler.select_pod_for_task(task, candidate_pods, allocations)
     assert chosen == "pod_big"
     assert len(evals) == 2
+
+
+def test_scheduler_dynamic_allocations():
+    scheduler = PodScheduler()
+    candidate_pods = {
+        "pod_big": {
+            "cuda_available": True,
+            "device_name": "GPU-Big",
+            "free_vram_gb": 90.0,
+            "is_occupied": False,
+        },
+    }
+    task = {
+        "id": "heavy_task_2",
+        "requirements": {"min_vram_gb": 20.0, "gpu": True},
+    }
+    # Pod has 90GB free, but 75GB is already allocated in current scheduling tick
+    allocations = {"pod_big": 75.0}
+    chosen, evals = scheduler.select_pod_for_task(task, candidate_pods, allocations)
+    # Remaining free is 15GB, insufficient for 20GB task
+    assert chosen is None
+    assert any("Insufficient free VRAM" in r for r in evals[0].reasons)
+
+
+def test_validate_manifest_with_timeouts_and_idempotence():
+    manifest = {
+        "version": "1.0",
+        "name": "resilient-pipeline",
+        "tasks": [
+            {
+                "id": "ingest",
+                "command": "python3 ingest.py",
+                "timeout_seconds": 300,
+                "idempotent": True,
+                "requirements": {"min_vram_gb": 4.0},
+            },
+        ],
+    }
+    res = validate_manifest(manifest)
+    assert res.valid is True
+    assert res.task_count == 1
+

@@ -45,12 +45,15 @@ class MoLabVault:
         """
         self.session.resolve()
 
+        source_dir_json = json.dumps(source_dir)
+        max_bytes = int(max_size_mb * 1024 * 1024)
+
         # 1. Archive workspace into base64 payload on the pod
         pack_script = f"""
-import tarfile, io, base64, os, sys, warnings
+import tarfile, io, base64, os, sys, uuid, warnings
 warnings.filterwarnings('ignore')
 
-source_dir = "{source_dir}"
+source_dir = {source_dir_json}
 if not os.path.exists(source_dir):
     print("NO_SOURCE")
     sys.exit(0)
@@ -78,7 +81,7 @@ with tarfile.open(fileobj=buf, mode="w:gz") as tar:
 compressed_bytes = buf.getvalue()
 compressed_size = len(compressed_bytes)
 
-if compressed_size > {int(max_size_mb * 1024 * 1024)}:
+if compressed_size > {max_bytes}:
     print(f"TOO_LARGE:{{compressed_size}}")
     sys.exit(0)
 
@@ -103,16 +106,21 @@ def _():
     # MoLab Permanent In-Notebook Vault (Zero External Storage)
     import base64, io, os, tarfile, warnings
     warnings.filterwarnings("ignore")
-    dest = "{source_dir}"
+    dest = os.path.realpath({source_dir_json})
     os.makedirs(dest, exist_ok=True)
     b64_data = \"\"\"{{b64_str}}\"\"\"
     try:
         raw = base64.b64decode(b64_data)
         with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as t:
-            try:
-                t.extractall(dest, filter="data")
-            except TypeError:
-                t.extractall(dest)
+            for member in t.getmembers():
+                target_p = os.path.realpath(os.path.abspath(os.path.join(dest, member.name)))
+                if not target_p.startswith(dest + os.sep) and target_p != dest:
+                    continue
+                if member.issym() or member.islnk():
+                    link_p = os.path.realpath(os.path.abspath(os.path.join(os.path.dirname(target_p), member.linkname)))
+                    if not link_p.startswith(dest + os.sep) and link_p != dest:
+                        continue
+                t.extract(member, dest)
     except Exception:
         pass
     return
@@ -131,8 +139,12 @@ else:
     else:
         new_content = content.rstrip() + "\\n" + vault_cell.strip() + "\\n"
 
-with open(nb_path, "w", encoding="utf-8") as f:
+tmp_nb_path = f"/marimo/notebook.py.tmp_{{uuid.uuid4().hex}}"
+with open(tmp_nb_path, "w", encoding="utf-8") as f:
     f.write(new_content)
+    f.flush()
+    os.fsync(f.fileno())
+os.replace(tmp_nb_path, nb_path)
 
 print(f"SUCCESS:{{count}}:{{compressed_size}}:{{total_uncompressed}}")
 """
@@ -170,13 +182,21 @@ print(f"SUCCESS:{{count}}:{{compressed_size}}:{{total_uncompressed}}")
             "storage_location": "MoLab Cloud Database (100% on MoLab)",
         }
 
-    def unpack_workspace(self, target_dir: str = "/workspace") -> Dict[str, Any]:
+    def unpack_workspace(
+        self,
+        target_dir: str = "/workspace",
+        overwrite: bool = True,
+    ) -> Dict[str, Any]:
         """
         Extract files from the in-notebook vault directly into /workspace on the pod.
+        Safely validates archive members against path traversal and symlink escapes.
+        Provides conflict detection and non-destructive restore option.
         """
         self.session.resolve()
+        target_dir_json = json.dumps(target_dir)
+        overwrite_val = "True" if overwrite else "False"
         unpack_script = f"""
-import base64, io, os, tarfile, sys, warnings
+import base64, io, os, tarfile, sys, warnings, json
 warnings.filterwarnings('ignore')
 
 nb_path = "/marimo/notebook.py"
@@ -198,47 +218,88 @@ s_idx = content.find('b64_data = \"\"\"') + len('b64_data = \"\"\"')
 e_idx = content.find('\"\"\"', s_idx)
 b64_data = content[s_idx:e_idx].strip()
 
-raw = base64.b64decode(b64_data)
-dest = "{target_dir}"
-os.makedirs(dest, exist_ok=True)
-count = 0
-with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as t:
-    try:
-        t.extractall(dest, filter="data")
-    except TypeError:
-        t.extractall(dest)
-    count = len(t.getmembers())
+try:
+    raw = base64.b64decode(b64_data)
+except Exception as e:
+    print(f"CORRUPT_VAULT:{{e}}")
+    sys.exit(0)
 
-print(f"SUCCESS:{{count}}:{{len(raw)}}")
+dest = os.path.realpath({target_dir_json})
+os.makedirs(dest, exist_ok=True)
+overwrite = {overwrite_val}
+
+count = 0
+conflicts = []
+skipped = 0
+
+with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as t:
+    for member in t.getmembers():
+        target_p = os.path.realpath(os.path.abspath(os.path.join(dest, member.name)))
+        if not target_p.startswith(dest + os.sep) and target_p != dest:
+            # Traversal attempt blocked
+            continue
+        if member.issym() or member.islnk():
+            link_p = os.path.realpath(os.path.abspath(os.path.join(os.path.dirname(target_p), member.linkname)))
+            if not link_p.startswith(dest + os.sep) and link_p != dest:
+                # Symlink escape blocked
+                continue
+        if os.path.exists(target_p) and not member.isdir():
+            if not overwrite:
+                conflicts.append(member.name)
+                skipped += 1
+                continue
+        t.extract(member, dest)
+        count += 1
+
+res = {{
+    "status": "SUCCESS",
+    "files_unpacked": count,
+    "archive_bytes": len(raw),
+    "conflicts": conflicts[:50],
+    "conflicts_count": len(conflicts),
+    "files_skipped": skipped
+}}
+print("RESULT_JSON:" + json.dumps(res))
 """
         cmd = f"/tmp/uv-venv/bin/python -c {shlex.quote(unpack_script)}"
         raw_out = self.session.execute_command(cmd, timeout=45.0).strip()
 
-        success_line = None
         for line in raw_out.splitlines():
             line_s = line.strip()
-            if line_s.startswith("SUCCESS:"):
-                success_line = line_s
-                break
+            if line_s.startswith("RESULT_JSON:"):
+                payload = json.loads(line_s[len("RESULT_JSON:"):])
+                return {
+                    "notebook_id": self.notebook_id,
+                    "status": "unpacked",
+                    "files_unpacked": payload.get("files_unpacked", 0),
+                    "archive_bytes": payload.get("archive_bytes", 0),
+                    "target_dir": target_dir,
+                    "conflicts": payload.get("conflicts", []),
+                    "conflicts_count": payload.get("conflicts_count", 0),
+                    "files_skipped": payload.get("files_skipped", 0),
+                }
+            elif line_s.startswith("SUCCESS:"):
+                parts = line_s.split(":")
+                files_unpacked = int(parts[1])
+                archive_size = int(parts[2])
+                return {
+                    "notebook_id": self.notebook_id,
+                    "status": "unpacked",
+                    "files_unpacked": files_unpacked,
+                    "archive_bytes": archive_size,
+                    "target_dir": target_dir,
+                    "conflicts": [],
+                    "conflicts_count": 0,
+                    "files_skipped": 0,
+                }
             elif line_s == "NO_VAULT_FOUND":
                 raise VaultError("No vault found inside this notebook.")
             elif line_s == "NO_NOTEBOOK":
                 raise VaultError("No /marimo/notebook.py found on pod.")
+            elif line_s.startswith("CORRUPT_VAULT:"):
+                raise VaultError(f"Vault payload in notebook is corrupted: {line_s}")
 
-        if not success_line:
-            raise VaultError(f"Failed to unpack vault: {raw_out}")
-
-        parts = success_line.split(":")
-        files_unpacked = int(parts[1])
-        archive_size = int(parts[2])
-
-        return {
-            "notebook_id": self.notebook_id,
-            "status": "unpacked",
-            "files_unpacked": files_unpacked,
-            "archive_bytes": archive_size,
-            "target_dir": target_dir,
-        }
+        raise VaultError(f"Failed to unpack vault: {raw_out}")
 
     def inspect_vault(self) -> Dict[str, Any]:
         """

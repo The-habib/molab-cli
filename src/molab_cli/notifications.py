@@ -59,6 +59,30 @@ def redact_sensitive_data(val: Any) -> Any:
     return val
 
 
+def mask_webhook_url(url: str) -> str:
+    """
+    Mask secret tokens, keys, and credentials embedded inside webhook URLs
+    before logging or saving to persistent databases.
+    """
+    if not url:
+        return ""
+    # Discord: /api/webhooks/<id>/<token>
+    discord_m = re.match(r"(https?://discord(?:app)?\.com/api/webhooks/\d+/)[^/?#]+(.*)", url, re.IGNORECASE)
+    if discord_m:
+        return f"{discord_m.group(1)}{REDACTED_STR}{discord_m.group(2)}"
+    # Slack: /services/T.../B.../<token>
+    slack_m = re.match(r"(https?://hooks\.slack\.com/services/[A-Za-z0-9]+/[A-Za-z0-9]+/)[^/?#]+(.*)", url, re.IGNORECASE)
+    if slack_m:
+        return f"{slack_m.group(1)}{REDACTED_STR}{slack_m.group(2)}"
+    # Telegram: /bot<token>/...
+    tg_m = re.match(r"(https?://api\.telegram\.org/bot)[^/?#]+(.*)", url, re.IGNORECASE)
+    if tg_m:
+        return f"{tg_m.group(1)}{REDACTED_STR}{tg_m.group(2)}"
+    # Generic query params
+    return AUTH_PARAM_PATTERN.sub(r"\1" + REDACTED_STR, url)
+
+
+
 def format_webhook_payload(event_type: str, data: Dict[str, Any], webhook_url: str) -> Dict[str, Any]:
     """
     Format payload specifically for destination webhook provider (Discord, Telegram, or generic JSON).
@@ -193,8 +217,8 @@ class NotificationDispatcher:
                 self.job_manager.record_notification(
                     batch_id=batch_id or data.get("batch_id", "unknown"),
                     event_type=event_type,
-                    webhook_url=self.webhook_url,
-                    payload=data,
+                    webhook_url=mask_webhook_url(self.webhook_url),
+                    payload=redact_sensitive_data(data),
                     status=result.get("status", "FAILED"),
                     error_message=result.get("error"),
                 )

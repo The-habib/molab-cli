@@ -951,7 +951,7 @@ class MoLabMCPServer:
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "molab-mcp",
-                        "version": "2.0.0",
+                        "version": "2.4.0",
                     },
                 },
             }
@@ -985,12 +985,14 @@ class MoLabMCPServer:
                     },
                 }
             except Exception as e:
+                sys.stderr.write(f"[mcp] Error executing {tool_name}: {e}\n{traceback.format_exc()}\n")
+                sys.stderr.flush()
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,
                     "result": {
                         "content": [
-                            {"type": "text", "text": f"Error executing {tool_name}: {e}\n{traceback.format_exc()}"}
+                            {"type": "text", "text": f"Error executing {tool_name}: {e}"}
                         ],
                         "isError": True,
                     },

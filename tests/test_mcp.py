@@ -20,6 +20,7 @@ def test_mcp_initialize():
     assert resp["id"] == 100
     assert resp["result"]["protocolVersion"] == "2024-11-05"
     assert resp["result"]["serverInfo"]["name"] == "molab-mcp"
+    assert resp["result"]["serverInfo"]["version"] == "2.4.0"
 
 
 def test_mcp_tools_list():
@@ -99,3 +100,24 @@ def test_mcp_backend_tools():
         assert call_resp["id"] == 104
         assert call_resp["result"]["isError"] is False
         assert "160.0" in call_resp["result"]["content"][0]["text"]
+
+
+def test_mcp_tool_call_error_no_traceback():
+    server = MoLabMCPServer()
+    with patch.object(server, "execute_tool", side_effect=RuntimeError("Internal GPU failure")):
+        call_req = {
+            "jsonrpc": "2.0",
+            "id": 105,
+            "method": "tools/call",
+            "params": {
+                "name": "molab_doctor",
+                "arguments": {}
+            }
+        }
+        call_resp = server.handle_request(call_req)
+        assert call_resp["id"] == 105
+        assert call_resp["result"]["isError"] is True
+        err_text = call_resp["result"]["content"][0]["text"]
+        assert "Internal GPU failure" in err_text
+        assert "Traceback (most recent call last)" not in err_text
+

@@ -67,3 +67,41 @@ def test_web_api_jobs():
         res_logs = client.get("/api/jobs/job_1/logs")
         assert res_logs.status_code == 200
         assert "Step 1/10" in res_logs.json()["logs"]
+        assert instance.get_job_logs.call_args[1].get("tail_lines") == 50
+
+
+def test_web_api_pods_telemetry_failure():
+    with patch("molab_cli.web.MoLabClient") as mock_client, \
+         patch("molab_cli.web.SandboxSession") as mock_sess:
+        inst = mock_client.return_value
+        inst.list_notebooks.return_value = [{"id": "nb_unreach", "title": "Unreachable Pod"}]
+        inst.list_running_sandboxes.return_value = {"nb_unreach": "sb_1"}
+
+        sess_inst = mock_sess.return_value
+        sess_inst.get_workload_status.side_effect = ConnectionError("Pod network timed out")
+
+        response = client.get("/api/pods")
+        assert response.status_code == 200
+        pods = response.json()
+        assert len(pods) == 1
+        assert pods[0]["id"] == "nb_unreach"
+        assert pods[0]["is_free"] is False
+        assert pods[0]["status"] == "UNAVAILABLE"
+        assert "timed out" in pods[0]["error"]
+
+
+def test_web_csrf_origin_check():
+    # Attempting cross-origin request from malicious-site.com
+    res = client.post(
+        "/api/pods/nb_test/permanent",
+        headers={"origin": "https://malicious-site.com"}
+    )
+    assert res.status_code == 403
+    assert "Cross-origin" in res.json()["detail"]
+
+
+def test_web_invalid_notebook_id():
+    res = client.post("/api/pods/bad!id$/vault_pack")
+    assert res.status_code == 400
+    assert "Invalid notebook ID" in res.json()["detail"]
+

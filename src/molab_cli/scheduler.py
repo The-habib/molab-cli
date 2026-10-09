@@ -10,6 +10,7 @@ Features:
 import json
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -200,6 +201,7 @@ def evaluate_pod_for_task(
     pod_status: Dict[str, Any],
     requirements: Dict[str, Any],
     active_tasks_on_pod: int = 0,
+    allocated_vram_gb: float = 0.0,
 ) -> PodEvaluation:
     """
     Explainable resource-aware evaluation of a candidate pod against task requirements.
@@ -234,7 +236,8 @@ def evaluate_pod_for_task(
 
     # 4. VRAM headroom matching
     min_vram = float(requirements.get("min_vram_gb", 0.0))
-    free_vram = float(pod_status.get("free_vram_gb", 0.0))
+    raw_free = float(pod_status.get("free_vram_gb", 0.0))
+    free_vram = max(0.0, raw_free - float(allocated_vram_gb))
 
     if min_vram > 0:
         if free_vram < min_vram:
@@ -315,7 +318,8 @@ class PodScheduler:
         self,
         task: Dict[str, Any],
         candidate_pods: Dict[str, Dict[str, Any]],
-        active_allocations: Dict[str, int],
+        active_allocations: Dict[str, Any],
+        vram_allocations: Optional[Dict[str, float]] = None,
     ) -> Tuple[Optional[str], List[PodEvaluation]]:
         """
         Evaluate candidate pods against task requirements and return the optimal pod.
@@ -325,14 +329,28 @@ class PodScheduler:
         assigned_pod = task.get("assigned_pod")
         evaluations: List[PodEvaluation] = []
 
+        def _get_alloc_info(p_id: str) -> Tuple[int, float]:
+            v_alloc = 0.0
+            if vram_allocations and p_id in vram_allocations:
+                v_alloc = float(vram_allocations[p_id])
+            val = active_allocations.get(p_id, 0)
+            if isinstance(val, float):
+                v_alloc = max(v_alloc, val)
+                t_count = 1 if val > 0 else 0
+            else:
+                t_count = int(val)
+            return t_count, v_alloc
+
         # If task explicitly pins a specific pod
         if assigned_pod:
             if assigned_pod in candidate_pods:
+                t_count, v_alloc = _get_alloc_info(assigned_pod)
                 eval_res = evaluate_pod_for_task(
                     assigned_pod,
                     candidate_pods[assigned_pod],
                     reqs,
-                    active_allocations.get(assigned_pod, 0),
+                    active_tasks_on_pod=t_count,
+                    allocated_vram_gb=v_alloc,
                 )
                 evaluations.append(eval_res)
                 if eval_res.eligible:
@@ -349,8 +367,14 @@ class PodScheduler:
 
         # Dynamic scheduling across all available running pods
         for pod_id, pod_status in candidate_pods.items():
-            active_count = active_allocations.get(pod_id, 0)
-            eval_res = evaluate_pod_for_task(pod_id, pod_status, reqs, active_count)
+            t_count, v_alloc = _get_alloc_info(pod_id)
+            eval_res = evaluate_pod_for_task(
+                pod_id,
+                pod_status,
+                reqs,
+                active_tasks_on_pod=t_count,
+                allocated_vram_gb=v_alloc,
+            )
             evaluations.append(eval_res)
 
         eligible = [ev for ev in evaluations if ev.eligible]
@@ -434,12 +458,54 @@ class BatchOrchestrator:
         self.job_manager.update_batch_status(batch_id, status="RUNNING", started_at=now)
         emit("batch_started", {"batch_name": batch.get("name"), "task_count": len(batch.get("tasks", []))})
 
+        worker_id = f"worker_{os.getpid()}_{uuid.uuid4().hex[:6]}"
         start_time = time.time()
         active_allocations: Dict[str, int] = {}
 
+        # Reconcile previously RUNNING tasks after controller restarts
+        initial_tasks = self.job_manager.get_batch_tasks(batch_id)
+        for t in initial_tasks:
+            if t["status"] == "RUNNING" and t.get("job_id"):
+                try:
+                    refreshed = self.job_manager.refresh_job_status(t["job_id"])
+                    st = refreshed["status"]
+                    if st == "COMPLETED":
+                        self.job_manager.update_batch_task(
+                            t["id"],
+                            status="COMPLETED",
+                            exit_code=0,
+                            completed_at=time.time(),
+                        )
+                    elif st in ("FAILED", "LOST"):
+                        is_idempotent = bool(t.get("idempotent", 1))
+                        attempts = t.get("attempts", 1)
+                        max_att = t.get("max_attempts", 1)
+                        if is_idempotent and attempts < max_att:
+                            self.job_manager.update_batch_task(
+                                t["id"],
+                                status="READY",
+                                job_id=None,
+                                assigned_pod=None if not t.get("metadata", {}).get("pinned_pod") else t.get("assigned_pod"),
+                                error_message=f"Reconciled after controller restart: {refreshed.get('error_message')}. Retrying...",
+                            )
+                        else:
+                            self.job_manager.update_batch_task(
+                                t["id"],
+                                status="FAILED",
+                                exit_code=refreshed.get("exit_code", 1),
+                                completed_at=time.time(),
+                                error_message=f"Task lost or non-idempotent after restart: {refreshed.get('error_message')}",
+                            )
+                    elif st == "RUNNING":
+                        assigned = t.get("assigned_pod")
+                        if assigned:
+                            active_allocations[assigned] = active_allocations.get(assigned, 0) + 1
+                except Exception:
+                    pass
+
         try:
             while True:
-                # 1. Check timeout
+                # 1. Check batch overall timeout
                 if timeout and (time.time() - start_time) > timeout:
                     self.job_manager.cancel_batch(batch_id)
                     self.job_manager.update_batch_status(
@@ -455,12 +521,38 @@ class BatchOrchestrator:
                 tasks = self.job_manager.get_batch_tasks(batch_id)
                 task_map = {t["task_key"]: t for t in tasks}
 
-                # 3. Synchronize RUNNING tasks with remote pod state
+                # 3. Synchronize RUNNING tasks with remote pod state & check per-task timeouts
                 running_tasks = [t for t in tasks if t["status"] == "RUNNING"]
                 for t in running_tasks:
                     job_id = t.get("job_id")
                     if not job_id:
                         continue
+
+                    # Per-task timeout enforcement
+                    task_timeout = t.get("timeout_seconds") or t.get("metadata", {}).get("timeout_seconds")
+                    started_at = t.get("started_at")
+                    if task_timeout and started_at and (time.time() - started_at) > task_timeout:
+                        try:
+                            self.job_manager.cancel_job(job_id)
+                        except Exception:
+                            pass
+                        self.job_manager.update_batch_task(
+                            t["id"],
+                            status="FAILED",
+                            exit_code=124,
+                            completed_at=time.time(),
+                            error_message=f"Task execution exceeded timeout limit of {task_timeout} seconds.",
+                        )
+                        assigned = t.get("assigned_pod")
+                        if assigned and assigned in active_allocations:
+                            active_allocations[assigned] = max(0, active_allocations[assigned] - 1)
+                        emit("task_failed", {
+                            "task_key": t["task_key"],
+                            "pod_id": assigned,
+                            "error": f"Task timed out after {task_timeout}s",
+                        })
+                        continue
+
                     refreshed = self.job_manager.refresh_job_status(job_id)
                     st = refreshed["status"]
 
@@ -477,29 +569,36 @@ class BatchOrchestrator:
                         emit("task_completed", {"task_key": t["task_key"], "pod_id": assigned})
 
                     elif st in ("FAILED", "LOST"):
-                        # Check retry policy
                         attempts = t.get("attempts", 1)
                         max_att = t.get("max_attempts", 1)
-                        if attempts < max_att:
-                            # Retry task
+                        is_idempotent = bool(t.get("idempotent", 1))
+
+                        if attempts < max_att and is_idempotent:
+                            # Safe retry: unpin pod so scheduler can pick an alternate healthy pod
+                            orig_pinned = t.get("metadata", {}).get("pinned_pod")
                             self.job_manager.update_batch_task(
                                 t["id"],
                                 status="READY",
                                 job_id=None,
+                                assigned_pod=orig_pinned if orig_pinned else None,
                                 error_message=f"Attempt {attempts} failed: {refreshed.get('error_message')}. Retrying...",
                             )
                         else:
-                            # Exhausted retries
+                            # Non-idempotent or exhausted retries
+                            fail_msg = refreshed.get("error_message") or "Process failed."
+                            if not is_idempotent and attempts < max_att:
+                                fail_msg = f"Non-idempotent task failure: {fail_msg} (automatic rerun disabled)."
                             self.job_manager.update_batch_task(
                                 t["id"],
                                 status="FAILED",
                                 exit_code=refreshed.get("exit_code", 1),
                                 completed_at=time.time(),
-                                error_message=refreshed.get("error_message") or "Process failed.",
+                                error_message=fail_msg,
                             )
-                            assigned = t.get("assigned_pod")
-                            if assigned and assigned in active_allocations:
-                                active_allocations[assigned] = max(0, active_allocations[assigned] - 1)
+                        assigned = t.get("assigned_pod")
+                        if assigned and assigned in active_allocations:
+                            active_allocations[assigned] = max(0, active_allocations[assigned] - 1)
+                        if attempts >= max_att or not is_idempotent:
                             emit("task_failed", {
                                 "task_key": t["task_key"],
                                 "pod_id": assigned,
@@ -554,18 +653,36 @@ class BatchOrchestrator:
                 # 6. Schedule READY tasks onto candidate pods up to concurrency limit
                 if ready_tasks and len(running_tasks) < concurrency:
                     candidate_pods = self.scheduler.inspect_candidate_pods()
+                    simulated_vram_alloc: Dict[str, float] = {}
 
                     for t in ready_tasks:
                         if len(running_tasks) >= concurrency:
                             break
 
+                        # Recalculate pod capacity dynamically within this scheduling tick
+                        adjusted_candidates = {}
+                        for p_id, p_info in candidate_pods.items():
+                            p_copy = dict(p_info)
+                            current_free = float(p_copy.get("free_vram_gb", 0.0))
+                            reserved = simulated_vram_alloc.get(p_id, 0.0)
+                            p_copy["free_vram_gb"] = max(0.0, current_free - reserved)
+                            adjusted_candidates[p_id] = p_copy
+
                         pod_id, evaluations = self.scheduler.select_pod_for_task(
                             t,
-                            candidate_pods,
+                            adjusted_candidates,
                             active_allocations,
                         )
 
                         if pod_id:
+                            # Transactional claim lease prevents concurrent double-scheduling
+                            if not self.job_manager.claim_batch_task(t["id"], worker_id=worker_id, lease_seconds=180.0):
+                                continue
+
+                            # Deduct required VRAM from this pod's capacity for the rest of this tick
+                            task_vram = float(t.get("requirements", {}).get("min_vram_gb", 0.0))
+                            simulated_vram_alloc[pod_id] = simulated_vram_alloc.get(pod_id, 0.0) + task_vram
+
                             # Launch task on selected pod
                             try:
                                 cmd = t.get("command")
