@@ -243,7 +243,11 @@ def inspect_auth_status() -> Dict[str, Any]:
     """Return parsed metadata about the current authentication state."""
     client_cookie = get_client_cookie()
     if not client_cookie:
-        return {"authenticated": False, "reason": "No __client cookie configured"}
+        return {
+            "authenticated": False,
+            "reason": "No __client cookie configured",
+            "error": "No __client cookie configured",
+        }
 
     payload = decode_jwt_payload(client_cookie)
     client_id = payload.get("id", "Unknown")

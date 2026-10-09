@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "molab-cli"
-version = "2.3.0"
+version = "2.3.1"
 description = "Autonomous Multi-Pod Cloud GPU Orchestrator, Anti-Idle Keepalive & Workspace Persistence Engine for MoLab with NVIDIA Blackwell (96GB VRAM) pods"
 readme = "README.md"
 license = "MIT"
@@ -38,6 +38,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: System :: Distributed Computing",
     "Topic :: Terminals"
@@ -48,7 +49,9 @@ dependencies = [
     "httpx>=0.24.0",
     "websockets>=11.0",
     "questionary>=2.0.0",
-    "prompt_toolkit>=3.0.0"
+    "prompt_toolkit>=3.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0"
 ]
 
 [project.optional-dependencies]

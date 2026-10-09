@@ -57,3 +57,17 @@ def test_theme_render_status_bar():
     render_status_bar({"authenticated": True, "user_email": "test@example.com"}, running_count=2)
     render_status_bar({"authenticated": False})
     render_error_card("Test Error", "Test Message", hint="Test Hint")
+
+
+def test_cli_unauthenticated():
+    from unittest.mock import patch
+    runner = CliRunner()
+    with patch("molab_cli.config.load_config", return_value={}):
+        res = runner.invoke(cli, ["status"])
+        assert res.exit_code == 0
+        assert "Authentication Inactive" in res.output or "molab login" in res.output
+
+        res_json = runner.invoke(cli, ["status", "--json"])
+        assert res_json.exit_code == 0
+        assert '"authenticated": false' in res_json.output
+
