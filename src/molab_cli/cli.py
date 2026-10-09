@@ -270,9 +270,10 @@ def cmd_exec(notebook_id: str, command: str, timeout: float):
     with console.status(f"[bold cyan]Executing on remote pod ({session.notebook_id})...[/bold cyan]"):
         try:
             out = session.execute_command(command, timeout=timeout)
-            console.print(out)
+            console.print(out, markup=False)
         except Exception as e:
-            console.print(f"[red]Remote execution failed:[/red] {e}")
+            from rich.markup import escape
+            console.print(f"[red]Remote execution failed:[/red] {escape(str(e))}")
 
 
 @cli.command("shell")

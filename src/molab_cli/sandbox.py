@@ -10,6 +10,7 @@ import os
 import re
 import select
 import socketserver
+import subprocess
 import sys
 import termios
 import time
@@ -245,42 +246,67 @@ class SandboxSession:
 
     def push_file(self, local_path: str, remote_path: Optional[str] = None) -> Tuple[str, int]:
         """
-        Transfer a local file directly into the CoreWeave sandbox container.
+        Transfer a local file directly into the CoreWeave sandbox container using the native Marimo HTTP upload API.
         """
-        p = os.path.expanduser(local_path)
+        p = os.path.abspath(os.path.expanduser(local_path))
         if not os.path.exists(p):
             raise FileNotFoundError(f"Local file does not exist: {local_path}")
 
+        self.resolve()
         filename = os.path.basename(p)
-        dest = remote_path or f"/marimo/{filename}"
-        with open(p, "rb") as f:
-            data = f.read()
+        if remote_path and (remote_path.endswith("/") or self.execute_command(f"[ -d {remote_path} ] && echo 1 || echo 0").strip() == "1"):
+            dest_dir = remote_path.rstrip("/")
+            dest_name = filename
+            dest = f"{dest_dir}/{dest_name}"
+        else:
+            dest = remote_path or f"/workspace/{filename}"
+            dest_dir = os.path.dirname(dest) or "/workspace"
+            dest_name = os.path.basename(dest)
 
-        b64 = base64.b64encode(data).decode("utf-8")
-        # Ensure parent directory exists and decode into file
-        cmd = f"mkdir -p $(dirname {dest}) && echo '{b64}' | base64 -d > {dest} && ls -la {dest}"
-        out = self.execute_command(cmd)
-        return dest, len(data)
+        file_size = os.path.getsize(p)
+
+        # Ensure parent destination directory exists on pod
+        self.execute_command(f"mkdir -p {dest_dir}")
+
+        # Stream directly via native Marimo HTTP multipart file upload API
+        upload_url = f"{self.base_url}/api/files/create?token={self.auth_token}"
+        curl_cmd = [
+            "curl", "-s", "-f", "-X", "POST",
+            upload_url,
+            "-F", f"path={dest_dir}",
+            "-F", "type=file",
+            "-F", f"name={dest_name}",
+            "-F", f"file=@{p}"
+        ]
+        res = subprocess.run(curl_cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(f"HTTP upload failed (code {res.returncode}): {res.stderr}")
+
+        return dest, file_size
 
     def pull_file(self, remote_path: str, local_path: Optional[str] = None) -> Tuple[str, int]:
         """
-        Download a file from the CoreWeave sandbox container to local storage.
+        Download a file from the CoreWeave sandbox container using the native Marimo HTTP download API.
         """
+        self.resolve()
         dest = local_path or os.path.basename(remote_path)
         dest_p = os.path.abspath(os.path.expanduser(dest))
+        if os.path.isdir(dest_p):
+            dest_p = os.path.join(dest_p, os.path.basename(remote_path))
 
-        # Check file exists and dump base64
-        out = self.execute_command(f"base64 {remote_path}")
-        clean_b64 = out.strip().replace("\n", "").replace("\r", "")
-        try:
-            raw_bytes = base64.b64decode(clean_b64)
-        except Exception as e:
-            raise RuntimeError(f"Failed to decode remote file content: {e}")
+        os.makedirs(os.path.dirname(dest_p), exist_ok=True)
 
-        with open(dest_p, "wb") as f:
-            f.write(raw_bytes)
+        download_url = f"{self.base_url}/api/files/download?path={remote_path}&token={self.auth_token}"
+        curl_cmd = [
+            "curl", "-s", "-f", "-L",
+            "-o", dest_p,
+            download_url
+        ]
+        res = subprocess.run(curl_cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(f"HTTP download failed (code {res.returncode}): {res.stderr}")
 
-        return dest_p, len(raw_bytes)
+        return dest_p, os.path.getsize(dest_p)
 
     def get_gpu_telemetry(self) -> Dict[str, Any]:
         """
@@ -373,7 +399,7 @@ class SandboxSession:
         if "healthy" in raw:
             return True
 
-        self.execute_command("bash /marimo/start_server.sh", timeout=10.0)
+        self.execute_command("bash /workspace/start.sh 2>/dev/null || bash /marimo/start_server.sh", timeout=15.0)
         deadline = time.time() + 35
         while time.time() < deadline:
             time.sleep(2.0)
@@ -409,7 +435,9 @@ class LocalHttpForwarder:
                 self.end_headers()
 
             def do_GET(self):
-                cmd = f"curl -s -X GET http://127.0.0.1:8000{self.path}"
+                auth = self.headers.get("Authorization", "")
+                auth_hdr = f"-H 'Authorization: {auth}' " if auth else ""
+                cmd = f"curl -s -X GET {auth_hdr}http://127.0.0.1:8000{self.path}"
                 raw = session.execute_command(cmd, timeout=30.0)
                 self._send_response(raw)
 
@@ -417,21 +445,34 @@ class LocalHttpForwarder:
                 content_len = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_len) if content_len > 0 else b""
                 b64_body = base64.b64encode(body).decode("utf-8")
-                cmd = f"echo '{b64_body}' | base64 -d | curl -s -X POST http://127.0.0.1:8000{self.path} -H 'Content-Type: application/json' --data-binary @-"
+                auth = self.headers.get("Authorization", "")
+                auth_hdr = f"-H 'Authorization: {auth}' " if auth else ""
+                cmd = f"echo '{b64_body}' | base64 -d | curl -s -X POST http://127.0.0.1:8000{self.path} {auth_hdr}-H 'Content-Type: application/json' --data-binary @-"
                 raw = session.execute_command(cmd, timeout=120.0)
                 self._send_response(raw)
 
+            protocol_version = "HTTP/1.1"
+
+            def handle(self):
+                try:
+                    super().handle()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+
             def _send_response(self, content_str: str, status_code: int = 200):
                 body_bytes = content_str.encode("utf-8")
-                self.send_response(status_code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-                self.send_header("Content-Length", str(len(body_bytes)))
-                self.end_headers()
-                self.wfile.write(body_bytes)
+                try:
+                    self.send_response(status_code)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+                    self.send_header("Content-Length", str(len(body_bytes)))
+                    self.end_headers()
+                    self.wfile.write(body_bytes)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
 
-        # Allow port reuse
-        socketserver.TCPServer.allow_reuse_address = True
-        with socketserver.TCPServer(("127.0.0.1", self.port), ProxyHandler) as httpd:
+        # Allow port reuse and handle concurrent requests via threads
+        socketserver.ThreadingTCPServer.allow_reuse_address = True
+        with socketserver.ThreadingTCPServer(("127.0.0.1", self.port), ProxyHandler) as httpd:
             httpd.serve_forever()
