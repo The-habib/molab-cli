@@ -98,11 +98,65 @@ Any MCP-compatible client (Claude Desktop, Cursor, Antigravity) can connect dire
   }
 }
 ```
-Exposes 15 typed tools for pod discovery, command execution, streaming transfers, and job tracking.
+Exposes 19 typed tools for pod discovery, command execution, streaming transfers, job tracking, and batch pipeline orchestration (`molab_batch_validate`, `molab_batch_submit`, `molab_batch_status`, `molab_batch_cancel`).
 
 ---
 
-## 3. Extensibility Mandate
+## 3. Autonomous Multi-Pod Batch Pipelines
+
+When automating multi-step machine learning workflows or distributed media processing:
+
+### Creating a Batch Manifest (`batch.json`):
+```json
+{
+  "version": "1.0",
+  "name": "ai-video-pipeline",
+  "concurrency_limit": 2,
+  "notifications": {
+    "webhook_url": "https://discord.com/api/webhooks/...",
+    "events": ["batch_started", "task_completed", "task_failed", "batch_completed"]
+  },
+  "tasks": [
+    {
+      "id": "ingest",
+      "name": "Fetch Assets",
+      "command": "python3 /workspace/download_raw.py",
+      "requirements": {"gpu": false, "min_vram_gb": 0.0}
+    },
+    {
+      "id": "enhance_4k",
+      "name": "Neural 4K Upscale",
+      "command": "python3 /workspace/upscale.py",
+      "dependencies": ["ingest"],
+      "requirements": {"gpu": true, "min_vram_gb": 16.0},
+      "max_attempts": 2
+    }
+  ]
+}
+```
+
+### Running from CLI:
+```bash
+# Validate manifest structure and topological stages
+molab batch validate batch.json
+
+# Execute autonomous orchestration across candidate pods
+molab batch run batch.json
+```
+
+### Running from Python SDK:
+```python
+from molab_cli.sdk import MoLabSDK
+
+sdk = MoLabSDK()
+batch_id = sdk.submit_batch(manifest, concurrency_limit=2)
+result = sdk.run_batch(batch_id, poll_interval=2.0)
+print("Pipeline status:", result["status"])
+```
+
+---
+
+## 4. Extensibility Mandate
 
 `molab-cli` is stored at `~/molab-cli/` in editable mode.
 If you need additional flags, custom streaming logic, or specialized diagnostic tools:
@@ -110,4 +164,5 @@ If you need additional flags, custom streaming logic, or specialized diagnostic 
 2. Run `pytest ~/molab-cli/tests/`.
 3. Commit with `git -C ~/molab-cli commit -am "feat: ..."`
 Future agent conversations will automatically inherit your upgrades!
+
 

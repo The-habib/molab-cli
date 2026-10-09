@@ -10,10 +10,12 @@
 
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/Architecture-Cloud--Native%20TUI%20%26%20CLI-blue.svg" alt="Architecture"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Engine-Multi--Pod%20Orchestrator%20v2.2-0ea5e9.svg" alt="Orchestration"></a>
   <a href="#"><img src="https://img.shields.io/badge/GPU-NVIDIA%20Blackwell%20(96GB%20VRAM)-76b900.svg" alt="GPU"></a>
   <a href="#"><img src="https://img.shields.io/badge/Transfer-Native%20HTTP%2F2%20Streaming-success.svg" alt="File Transfer"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Jobs-SQLite%20Persistent%20Queue-orange.svg" alt="Jobs"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0-purple.svg" alt="MCP"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Jobs-SQLite%20DAG%20%26%20Batch%20Queue-orange.svg" alt="Jobs"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(19%20Tools)-purple.svg" alt="MCP"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-60%20Passed%20(100%25)-success.svg" alt="Tests"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-Termux%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
@@ -36,8 +38,9 @@ Running high-end GPU workloads in the cloud shouldn't mean juggling fragmented w
 `molab-cli` bridges that gap:
 - **Zero Terminal Buffer Bottlenecks:** Bypasses kernel PTY 4096-byte WebSocket limitations using direct Marimo HTTP/2 streaming endpoints (`/api/files/create` and `/api/files/download`) at line rate (80+ MB/s).
 - **Safe Multi-Pod Coexistence:** Intelligently audits active GPU pods (`molab free`) to prevent accidental disruptions of running production jobs or inference servers.
+- **Autonomous Multi-Pod Batch Engine:** Features resource-aware dynamic GPU scheduling, DAG dependency resolution, transactional task leases, and isolated webhook delivery across multi-task pipelines (`molab batch`).
 - **Durable Background Job Engine:** Features a local SQLite job repository (`~/.config/molab/jobs.db`) with state machines, exit code traps, live log tailing, and automatic artifact discovery.
-- **First-Class AI Agent Interoperability:** Implements an official **MCP Server** (`molab mcp`) and a typed Python SDK, empowering AI agents in Claude Desktop, Cursor, and Antigravity to operate cloud GPUs autonomously.
+- **First-Class AI Agent Interoperability:** Implements an official **MCP Server** (`molab mcp` with 19 typed tools) and a typed Python SDK, empowering AI agents in Claude Desktop, Cursor, and Antigravity to operate cloud GPUs autonomously.
 
 ---
 
@@ -67,17 +70,19 @@ Provide AI agents in Cursor, Claude Desktop, and Antigravity with native capabil
 | Client Environment (Termux / Linux / macOS)                                   |
 |                                                                               |
 |   ~/.config/molab/config.json  <-- Clerk Authentication Session               |
-|   ~/.config/molab/jobs.db      <-- Local SQLite Job & Artifact Repository     |
+|   ~/.config/molab/jobs.db      <-- Local SQLite Job & Batch Repository        |
 |                                                                               |
 |   Subsystems:                                                                 |
-|   ├── capabilities.py : Capabilities detection & diagnostic Doctor checks     |
-|   ├── execution.py    : Structured execution, exit code traps, nohup launcher |
-|   ├── jobs.py         : Persistent SQLite job engine & artifact manifests     |
-|   ├── mcp.py          : Model Context Protocol (MCP) JSON-RPC 2.0 Server      |
-|   ├── transfer.py     : Native HTTP streaming, SHA-256 manifests & sync      |
-|   ├── workloads.py    : Pluggable AI workload templates & parameter schemas   |
-|   ├── services.py     : Model server lifecycle & application health checks    |
-|   └── sdk.py          : High-level typed Python SDK for automated scripts     |
+|   ├── capabilities.py  : Capabilities detection & diagnostic Doctor checks    |
+|   ├── execution.py     : Structured execution, exit code traps, nohup launcher|
+|   ├── jobs.py          : Persistent SQLite job engine & artifact manifests    |
+|   ├── scheduler.py     : Multi-pod resource matcher, DAG solver & orchestrator|
+|   ├── notifications.py : Isolated HTTPS/Discord webhooks with secret redaction|
+|   ├── mcp.py           : Model Context Protocol (MCP) JSON-RPC 2.0 Server     |
+|   ├── transfer.py      : Native HTTP streaming, SHA-256 manifests & sync     |
+|   ├── workloads.py     : Pluggable AI workload templates & parameter schemas  |
+|   ├── services.py      : Model server lifecycle & application health checks   |
+|   └── sdk.py           : High-level typed Python SDK for automated scripts    |
 +-------------------------------------------------------------------------------+
          │                                                      │
          │ [HTTPS REST Gateway]                                 │ [WebSocket Gateway]
@@ -241,7 +246,28 @@ molab job cancel <job_id>
 molab job artifacts <job_id> --download ./results
 ```
 
-### 5. AI Model Studio & Localhost Bridge
+### 5. Autonomous Multi-Pod Batch Pipelines (v2.2)
+```bash
+# Validate manifest schema and DAG dependencies:
+molab batch validate examples/pipeline_manifest.json
+
+# Submit batch to SQLite queue:
+molab batch submit examples/pipeline_manifest.json --max-parallel 2
+
+# Execute pipeline with autonomous pod matching & live progress:
+molab batch run examples/pipeline_manifest.json --poll 2.0
+
+# Inspect batch status & task breakdown:
+molab batch status <batch_id> --json
+
+# View live execution logs for a task:
+molab batch logs <batch_id> --task gpu_verify
+
+# Test isolated webhook notifications:
+molab notify test --url https://discord.com/api/webhooks/...
+```
+
+### 6. AI Model Studio & Localhost Bridge
 ```bash
 # Check application-level health of model server on pod:
 molab serve status <id> --port 8000 --json
@@ -270,7 +296,7 @@ molab chat <id>
 }
 ```
 
-### Exposed MCP Tools (15 Typed Tools):
+### Exposed MCP Tools (19 Typed Tools):
 - **`molab_doctor`**: Diagnose environment health and connectivity.
 - **`molab_capabilities`**: Discover supported hardware, storage, and runtimes.
 - **`molab_list_pods`**: List all notebooks and active sandboxes.
@@ -286,6 +312,10 @@ molab chat <id>
 - **`molab_job_cancel`**: Cancel running jobs.
 - **`molab_service_status`**: Verify application health of model endpoints.
 - **`molab_run_workload`**: Launch pre-configured workload templates.
+- **`molab_batch_validate`**: Validate batch pipeline JSON manifests.
+- **`molab_batch_submit`**: Submit multi-task pipeline for execution.
+- **`molab_batch_status`**: Inspect batch progress and task status.
+- **`molab_batch_cancel`**: Cancel running batch pipeline.
 
 ---
 

@@ -215,3 +215,33 @@ class ValidationError(MoLabError):
     ):
         super().__init__(message, hint, code=code, details=details)
 
+
+class BatchNotFoundError(MoLabError):
+    """Raised when a requested batch workload ID cannot be found."""
+
+    def __init__(
+        self,
+        batch_id: str,
+        hint: Optional[str] = "Run 'molab batch list' to view active and completed batches.",
+        code: str = "BATCH_NOT_FOUND",
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        d = details or {}
+        d["batch_id"] = batch_id
+        super().__init__(f"Batch '{batch_id}' not found.", hint, code=code, details=d)
+        self.batch_id = batch_id
+
+
+class SchedulingError(MoLabError):
+    """Raised when no suitable pod meets workload requirements or scheduling fails."""
+
+    def __init__(
+        self,
+        message: str,
+        hint: Optional[str] = "Inspect available pods with 'molab free' or reduce task VRAM requirements.",
+        code: str = "SCHEDULING_ERROR",
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(message, hint, code=code, details=details)
+
+

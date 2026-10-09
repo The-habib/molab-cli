@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "molab-cli"
-version = "1.0.0"
-description = "Modern interactive TUI & CLI cloud orchestrator for MoLab with NVIDIA Blackwell (96GB VRAM) pods"
+version = "2.2.0"
+description = "Autonomous Multi-Pod Cloud GPU Orchestrator for MoLab with NVIDIA Blackwell (96GB VRAM) pods"
 readme = "README.md"
 license = "MIT"
 authors = [

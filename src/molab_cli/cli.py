@@ -1067,6 +1067,363 @@ def cmd_mcp():
     run_mcp_server()
 
 
+# =============================================================================
+# Batch Orchestration Commands
+# =============================================================================
+
+@cli.group("batch")
+def batch_group():
+    """Autonomous multi-pod batch pipeline execution and management."""
+    pass
+
+
+@batch_group.command("validate")
+@click.argument("manifest_path", type=click.Path(exists=True))
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output validation as JSON")
+def cmd_batch_validate(manifest_path: str, as_json: bool):
+    """Validate a batch pipeline manifest schema and DAG dependencies."""
+    from molab_cli.scheduler import validate_manifest
+
+    try:
+        with open(manifest_path, "r") as f:
+            manifest = json.load(f)
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"valid": False, "error": f"Failed to read manifest JSON: {e}"}))
+        else:
+            console.print(f"[bold red]Failed to read manifest:[/bold red] {e}")
+        return
+
+    res = validate_manifest(manifest)
+    if as_json:
+        print(json.dumps(res.to_dict(), indent=2))
+        return
+
+    if res.valid:
+        console.print(f"[bold green]✔ Manifest is valid![/bold green] ({res.task_count} tasks)")
+        if res.warnings:
+            for w in res.warnings:
+                console.print(f"[yellow]Warning:[/yellow] {w}")
+
+        table = Table(title="Topological Execution Stages", box=box.ROUNDED)
+        table.add_column("Stage", style="bold cyan", justify="right")
+        table.add_column("Parallel Tasks", style="bold white")
+        for idx, stage in enumerate(res.execution_order):
+            table.add_row(f"Stage {idx + 1}", ", ".join(stage))
+        console.print(table)
+    else:
+        console.print(f"[bold red]✘ Manifest validation failed with {len(res.errors)} error(s):[/bold red]")
+        for err in res.errors:
+            console.print(f"  [red]• {err}[/red]")
+
+
+@batch_group.command("submit")
+@click.argument("manifest_path", type=click.Path(exists=True))
+@click.option("-p", "--max-parallel", type=int, default=None, help="Max parallel tasks across pods")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output submission as JSON")
+def cmd_batch_submit(manifest_path: str, max_parallel: Optional[int], as_json: bool):
+    """Submit a batch pipeline manifest for multi-pod execution."""
+    from molab_cli.scheduler import BatchOrchestrator
+
+    try:
+        with open(manifest_path, "r") as f:
+            manifest = json.load(f)
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": f"Failed to read manifest: {e}"}))
+        else:
+            console.print(f"[bold red]Failed to read manifest:[/bold red] {e}")
+        return
+
+    orchestrator = BatchOrchestrator()
+    try:
+        batch_id = orchestrator.submit(manifest, concurrency_limit=max_parallel)
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[bold red]Submission error:[/bold red] {e}")
+        return
+
+    batch = orchestrator.job_manager.get_batch(batch_id)
+    if as_json:
+        print(json.dumps({"batch_id": batch_id, "status": batch["status"], "task_count": len(batch.get("tasks", []))}, indent=2))
+        return
+
+    console.print(f"[bold green]✔ Batch submitted successfully![/bold green]")
+    console.print(f"[bold]Batch ID:[/bold]   [bold cyan]{batch_id}[/bold cyan]")
+    console.print(f"[bold]Name:[/bold]       {batch.get('name')}")
+    console.print(f"[bold]Tasks:[/bold]      {len(batch.get('tasks', []))}")
+    console.print(f"[dim]Run with: [bold]molab batch run {batch_id}[/bold][/dim]")
+
+
+@batch_group.command("run")
+@click.argument("target")
+@click.option("-p", "--max-parallel", type=int, default=None, help="Max parallel tasks")
+@click.option("--poll", type=float, default=3.0, help="Poll interval in seconds")
+@click.option("--timeout", type=float, default=None, help="Execution timeout in seconds")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output result as JSON")
+def cmd_batch_run(target: str, max_parallel: Optional[int], poll: float, timeout: Optional[float], as_json: bool):
+    """Execute a batch pipeline (accepts a batch ID or manifest file path)."""
+    from molab_cli.scheduler import BatchOrchestrator
+
+    orchestrator = BatchOrchestrator()
+    batch_id = target
+
+    # Check if target is a file path
+    if os.path.exists(target):
+        try:
+            with open(target, "r") as f:
+                manifest = json.load(f)
+            batch_id = orchestrator.submit(manifest, concurrency_limit=max_parallel)
+            if not as_json:
+                console.print(f"[bold green]✔ Manifest submitted as {batch_id}[/bold green]")
+        except Exception as e:
+            if as_json:
+                print(json.dumps({"error": f"Failed to submit manifest: {e}"}))
+            else:
+                console.print(f"[bold red]Failed to submit manifest:[/bold red] {e}")
+            return
+
+    if not as_json:
+        console.print(f"[bold blue]Starting batch orchestration for {batch_id}...[/bold blue]")
+
+    def on_event(event_type: str, data: Dict[str, Any]):
+        if not as_json:
+            color = "green" if "completed" in event_type else ("red" if "failed" in event_type else "cyan")
+            msg = data.get("task_key", data.get("batch_name", ""))
+            console.print(f"[{color}]▶ [{event_type.upper()}][/{color}] {msg}")
+
+    try:
+        summary = orchestrator.run_batch(
+            batch_id,
+            max_parallel=max_parallel,
+            poll_interval=poll,
+            timeout=timeout,
+            on_event=on_event if not as_json else None,
+        )
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[bold red]Execution error:[/bold red] {e}")
+        return
+
+    if as_json:
+        print(json.dumps(summary, indent=2))
+        return
+
+    status_color = "bold green" if summary.get("status") == "COMPLETED" else "bold red"
+    console.print(f"\n[{status_color}]Batch {summary.get('status')}: {batch_id}[/{status_color}]")
+    counts = summary.get("task_counts", {})
+    console.print(f"Tasks: {counts.get('completed', 0)} completed, {counts.get('failed', 0)} failed, {counts.get('skipped', 0)} skipped, {counts.get('total', 0)} total.")
+
+
+@batch_group.command("list")
+@click.option("-n", "--limit", default=20, help="Max batches to list")
+@click.option("-s", "--status", default=None, help="Filter by status")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output as JSON")
+def cmd_batch_list(limit: int, status: Optional[str], as_json: bool):
+    """List historic and active batch pipelines."""
+    from molab_cli.jobs import JobManager
+
+    jm = JobManager()
+    batches = jm.list_batches(limit=limit, status=status)
+
+    if as_json:
+        print(json.dumps(batches, indent=2))
+        return
+
+    if not batches:
+        console.print("[yellow]No batches found.[/yellow]")
+        return
+
+    table = Table(title="MoLab Batch Pipelines", box=box.ROUNDED)
+    table.add_column("Batch ID", style="bold cyan", no_wrap=True)
+    table.add_column("Name", style="white")
+    table.add_column("Status", style="bold")
+    table.add_column("Tasks (Done/Total)", style="magenta")
+    table.add_column("Created", style="dim")
+
+    for b in batches:
+        st = b.get("status", "UNKNOWN")
+        st_color = "green" if st == "COMPLETED" else ("red" if st == "FAILED" else ("yellow" if st == "RUNNING" else "dim"))
+        c = b.get("task_counts", {})
+        progress = f"{c.get('completed', 0)}/{c.get('total', 0)}"
+        if c.get("failed", 0) > 0:
+            progress += f" [red]({c.get('failed')} failed)[/red]"
+        created = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(b.get("created_at", 0)))
+        table.add_row(b["id"], b.get("name") or "Unnamed", f"[{st_color}]{st}[/{st_color}]", progress, created)
+
+    console.print(table)
+
+
+@batch_group.command("status")
+@click.argument("batch_id")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output as JSON")
+def cmd_batch_status(batch_id: str, as_json: bool):
+    """Show detailed status and task breakdown for a batch."""
+    from molab_cli.jobs import JobManager
+
+    jm = JobManager()
+    try:
+        batch = jm.get_batch(batch_id)
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+        return
+
+    if as_json:
+        print(json.dumps(batch, indent=2))
+        return
+
+    st = batch.get("status", "UNKNOWN")
+    st_color = "green" if st == "COMPLETED" else ("red" if st == "FAILED" else ("yellow" if st == "RUNNING" else "cyan"))
+
+    console.print(Panel(
+        f"[bold]Batch ID:[/bold]     {batch['id']}\n"
+        f"[bold]Name:[/bold]         {batch.get('name')}\n"
+        f"[bold]Status:[/bold]       [{st_color}]{st}[/{st_color}]\n"
+        f"[bold]Concurrency:[/bold]  {batch.get('concurrency_limit')}\n"
+        f"[bold]Error:[/bold]        {batch.get('error_message') or 'None'}",
+        title=f"Batch Overview: {batch['id']}",
+        box=box.ROUNDED,
+    ))
+
+    table = Table(title="Constituent Tasks", box=box.ROUNDED)
+    table.add_column("Task Key", style="bold cyan")
+    table.add_column("Workload / Cmd", style="white")
+    table.add_column("Pod", style="yellow")
+    table.add_column("Status", style="bold")
+    table.add_column("Attempts", style="dim")
+    table.add_column("Exit Code", style="dim")
+
+    for t in batch.get("tasks", []):
+        t_st = t.get("status", "PENDING")
+        t_color = "green" if t_st == "COMPLETED" else ("red" if t_st == "FAILED" else ("yellow" if t_st == "RUNNING" else "dim"))
+        cmd_desc = t.get("workload_type") or (t.get("command")[:35] + "..." if t.get("command") else "N/A")
+        exit_code = str(t.get("exit_code")) if t.get("exit_code") is not None else "-"
+        table.add_row(
+            t.get("task_key"),
+            cmd_desc,
+            t.get("assigned_pod") or "-",
+            f"[{t_color}]{t_st}[/{t_color}]",
+            str(t.get("attempts", 0)),
+            exit_code,
+        )
+
+    console.print(table)
+
+
+@batch_group.command("logs")
+@click.argument("batch_id")
+@click.option("-t", "--task", "task_key", default=None, help="Specific task key to tail")
+@click.option("-n", "--tail", default=100, help="Number of log lines")
+def cmd_batch_logs(batch_id: str, task_key: Optional[str], tail: int):
+    """View remote execution logs for tasks in a batch."""
+    from molab_cli.jobs import JobManager
+
+    jm = JobManager()
+    batch = jm.get_batch(batch_id)
+    tasks = batch.get("tasks", [])
+
+    if task_key:
+        tasks = [t for t in tasks if t.get("task_key") == task_key]
+        if not tasks:
+            console.print(f"[red]Task '{task_key}' not found in batch {batch_id}.[/red]")
+            return
+
+    for t in tasks:
+        job_id = t.get("job_id")
+        console.print(f"\n[bold cyan]=== Task: {t.get('task_key')} (Job: {job_id or 'none'}, Pod: {t.get('assigned_pod') or 'none'}) ===[/bold cyan]")
+        if job_id:
+            logs = jm.get_job_logs(job_id, tail_lines=tail)
+            console.print(logs)
+        else:
+            console.print(f"[dim]No job launched yet (Status: {t.get('status')}).[/dim]")
+
+
+@batch_group.command("cancel")
+@click.argument("batch_id")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output as JSON")
+def cmd_batch_cancel(batch_id: str, as_json: bool):
+    """Cancel a running batch and stop remote tasks."""
+    from molab_cli.jobs import JobManager
+
+    jm = JobManager()
+    try:
+        updated = jm.cancel_batch(batch_id)
+        if as_json:
+            print(json.dumps(updated, indent=2))
+        else:
+            console.print(f"[bold yellow]Batch {batch_id} cancelled.[/bold yellow]")
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[bold red]Cancel failed:[/bold red] {e}")
+
+
+@batch_group.command("retry")
+@click.argument("batch_id")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output as JSON")
+def cmd_batch_retry(batch_id: str, as_json: bool):
+    """Reset failed or skipped tasks in a batch for re-running."""
+    from molab_cli.jobs import JobManager
+
+    jm = JobManager()
+    try:
+        updated = jm.retry_batch(batch_id)
+        if as_json:
+            print(json.dumps(updated, indent=2))
+        else:
+            console.print(f"[bold green]Batch {batch_id} reset to PENDING. Use 'molab batch run {batch_id}' to execute.[/bold green]")
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[bold red]Retry failed:[/bold red] {e}")
+
+
+# =============================================================================
+# Webhook Notifications Test Command
+# =============================================================================
+
+@cli.group("notify")
+def notify_group():
+    """Notification webhook configuration and test tools."""
+    pass
+
+
+@notify_group.command("test")
+@click.option("-u", "--url", required=True, help="Webhook URL to test")
+@click.option("-e", "--event", default="test_notification", help="Event type")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output as JSON")
+def cmd_notify_test(url: str, event: str, as_json: bool):
+    """Send a test webhook event with sanitized telemetry."""
+    from molab_cli.notifications import send_webhook
+
+    sample_data = {
+        "message": "Test notification from MoLab CLI v2.2",
+        "batch_id": "batch_test_001",
+        "pod": "nb_test_pod",
+        "vram_gb": 94.4,
+        "token": "secret_cookie_must_be_redacted",
+    }
+
+    result = send_webhook(url, event, sample_data)
+    if as_json:
+        print(json.dumps(result, indent=2))
+        return
+
+    if result.get("status") == "SENT":
+        console.print(f"[bold green]✔ Webhook delivered successfully![/bold green] (HTTP {result.get('status_code')})")
+    else:
+        console.print(f"[bold red]✘ Webhook delivery failed:[/bold red] {result.get('error')}")
+
+
 def main():
     cli()
 

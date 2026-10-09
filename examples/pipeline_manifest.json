@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "name": "live-verification-pipeline",
+  "concurrency_limit": 2,
+  "tasks": [
+    {
+      "id": "prep",
+      "name": "Preparation Stage",
+      "command": "python3 -c \"print('Stage 1: Environment and dataset initialization complete.')\"",
+      "requirements": {
+        "gpu": false,
+        "min_vram_gb": 0.0
+      }
+    },
+    {
+      "id": "gpu_verify",
+      "name": "GPU Compute Verification",
+      "command": "python3 -c \"import torch; print(f'Stage 2 Verified: CUDA available={torch.cuda.is_available()}, device={torch.cuda.get_device_name(0)}')\"",
+      "dependencies": ["prep"],
+      "requirements": {
+        "gpu": true,
+        "min_vram_gb": 1.0
+      }
+    }
+  ]
+}

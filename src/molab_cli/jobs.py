@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from molab_cli.exceptions import JobError, JobNotFoundError, SandboxOfflineError
+from molab_cli.exceptions import BatchNotFoundError, JobError, JobNotFoundError, SandboxOfflineError
 from molab_cli.execution import RemoteExecutor
 from molab_cli.sandbox import SandboxSession
 from molab_cli.transfer import TransferManager
@@ -73,6 +73,64 @@ class JobManager:
                     FOREIGN KEY(job_id) REFERENCES jobs(id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS batches (
+                    id TEXT PRIMARY KEY,
+                    name TEXT,
+                    status TEXT,
+                    manifest_json TEXT,
+                    concurrency_limit INTEGER,
+                    created_at REAL,
+                    started_at REAL,
+                    completed_at REAL,
+                    error_message TEXT,
+                    metadata_json TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS batch_tasks (
+                    id TEXT PRIMARY KEY,
+                    batch_id TEXT,
+                    task_key TEXT,
+                    name TEXT,
+                    workload_type TEXT,
+                    command TEXT,
+                    workdir TEXT,
+                    dependencies_json TEXT,
+                    requirements_json TEXT,
+                    assigned_pod TEXT,
+                    job_id TEXT,
+                    status TEXT,
+                    exit_code INTEGER,
+                    attempts INTEGER DEFAULT 0,
+                    max_attempts INTEGER DEFAULT 1,
+                    idempotent INTEGER DEFAULT 1,
+                    created_at REAL,
+                    started_at REAL,
+                    completed_at REAL,
+                    error_message TEXT,
+                    metadata_json TEXT,
+                    FOREIGN KEY(batch_id) REFERENCES batches(id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id TEXT,
+                    event_type TEXT,
+                    webhook_url TEXT,
+                    payload_json TEXT,
+                    status TEXT,
+                    attempts INTEGER DEFAULT 1,
+                    last_attempt_at REAL,
+                    error_message TEXT,
+                    created_at REAL,
+                    FOREIGN KEY(batch_id) REFERENCES batches(id)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_batch_tasks_batch ON batch_tasks(batch_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_batch_tasks_status ON batch_tasks(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_batch ON notifications(batch_id)")
             conn.commit()
 
     def submit_job(
@@ -330,3 +388,384 @@ class JobManager:
             results.append(summary)
 
         return results
+
+    # =========================================================================
+    # Batch Orchestration Subsystem
+    # =========================================================================
+
+    def create_batch(
+        self,
+        manifest: Dict[str, Any],
+        concurrency_limit: Optional[int] = None,
+    ) -> str:
+        """
+        Persist a new batch workload manifest and its constituent tasks in SQLite.
+        Initializes tasks in PENDING state within a single atomic transaction.
+        """
+        batch_id = f"batch_{uuid.uuid4().hex[:8]}"
+        batch_name = manifest.get("name") or f"batch-{batch_id[-6:]}"
+        limit = concurrency_limit or manifest.get("concurrency_limit", 4)
+        now = time.time()
+
+        tasks = manifest.get("tasks", [])
+
+        with self._get_conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("""
+                INSERT INTO batches (
+                    id, name, status, manifest_json, concurrency_limit,
+                    created_at, started_at, completed_at, error_message, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                batch_id,
+                batch_name,
+                "PENDING",
+                json.dumps(manifest),
+                limit,
+                now,
+                None,
+                None,
+                None,
+                json.dumps(manifest.get("metadata", {})),
+            ))
+
+            for task in tasks:
+                task_key = str(task.get("id") or f"task_{uuid.uuid4().hex[:6]}")
+                task_id = f"{batch_id}:{task_key}"
+                deps = json.dumps(task.get("dependencies", []))
+                reqs = json.dumps(task.get("requirements", {}))
+                meta = {
+                    "workload_params": task.get("workload_params", {}),
+                    "timeout_seconds": task.get("timeout_seconds", 3600),
+                }
+
+                conn.execute("""
+                    INSERT INTO batch_tasks (
+                        id, batch_id, task_key, name, workload_type,
+                        command, workdir, dependencies_json, requirements_json,
+                        assigned_pod, job_id, status, exit_code, attempts,
+                        max_attempts, idempotent, created_at, started_at,
+                        completed_at, error_message, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    task_id,
+                    batch_id,
+                    task_key,
+                    task.get("name") or task_key,
+                    task.get("workload_type", "custom"),
+                    task.get("command"),
+                    task.get("workdir", "/workspace"),
+                    deps,
+                    reqs,
+                    task.get("assigned_pod"),
+                    None,
+                    "PENDING",
+                    None,
+                    0,
+                    task.get("max_attempts", 1),
+                    1 if task.get("idempotent", True) else 0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    json.dumps(meta),
+                ))
+
+            conn.commit()
+
+        return batch_id
+
+    def get_batch(self, batch_id: str) -> Dict[str, Any]:
+        """Retrieve batch state and full constituent tasks list."""
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT * FROM batches WHERE id = ?", (batch_id,)).fetchone()
+            if not row:
+                raise BatchNotFoundError(batch_id)
+            batch = dict(row)
+
+            if batch.get("manifest_json"):
+                batch["manifest"] = json.loads(batch["manifest_json"])
+            if batch.get("metadata_json"):
+                batch["metadata"] = json.loads(batch["metadata_json"])
+
+            task_rows = conn.execute(
+                "SELECT * FROM batch_tasks WHERE batch_id = ? ORDER BY created_at ASC",
+                (batch_id,),
+            ).fetchall()
+
+            tasks = []
+            counts = {
+                "total": 0,
+                "pending": 0,
+                "ready": 0,
+                "running": 0,
+                "completed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "cancelled": 0,
+            }
+
+            for tr in task_rows:
+                t = dict(tr)
+                if t.get("dependencies_json"):
+                    t["dependencies"] = json.loads(t["dependencies_json"])
+                if t.get("requirements_json"):
+                    t["requirements"] = json.loads(t["requirements_json"])
+                if t.get("metadata_json"):
+                    t["metadata"] = json.loads(t["metadata_json"])
+                tasks.append(t)
+
+                st = (t.get("status") or "").lower()
+                if st in counts:
+                    counts[st] += 1
+                counts["total"] += 1
+
+            batch["tasks"] = tasks
+            batch["task_counts"] = counts
+            return batch
+
+    def list_batches(
+        self,
+        limit: int = 50,
+        status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List historic and active batches."""
+        with self._get_conn() as conn:
+            query = "SELECT * FROM batches"
+            params: List[Any] = []
+            if status:
+                query += " WHERE status = ?"
+                params.append(status.upper())
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+
+            rows = conn.execute(query, params).fetchall()
+            batches = []
+            for r in rows:
+                b = dict(r)
+                if b.get("metadata_json"):
+                    b["metadata"] = json.loads(b["metadata_json"])
+
+                # Count tasks summary quickly
+                counts_row = conn.execute("""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) as completed,
+                        SUM(CASE WHEN status = 'RUNNING' THEN 1 ELSE 0 END) as running,
+                        SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed,
+                        SUM(CASE WHEN status = 'READY' THEN 1 ELSE 0 END) as ready,
+                        SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) as pending,
+                        SUM(CASE WHEN status = 'SKIPPED' THEN 1 ELSE 0 END) as skipped,
+                        SUM(CASE WHEN status = 'CANCELLED' THEN 1 ELSE 0 END) as cancelled
+                    FROM batch_tasks WHERE batch_id = ?
+                """, (b["id"],)).fetchone()
+
+                b["task_counts"] = {
+                    "total": counts_row["total"] or 0,
+                    "completed": counts_row["completed"] or 0,
+                    "running": counts_row["running"] or 0,
+                    "failed": counts_row["failed"] or 0,
+                    "ready": counts_row["ready"] or 0,
+                    "pending": counts_row["pending"] or 0,
+                    "skipped": counts_row["skipped"] or 0,
+                    "cancelled": counts_row["cancelled"] or 0,
+                }
+                batches.append(b)
+
+            return batches
+
+    def get_batch_tasks(self, batch_id: str) -> List[Dict[str, Any]]:
+        """List tasks for a specific batch."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM batch_tasks WHERE batch_id = ? ORDER BY created_at ASC",
+                (batch_id,),
+            ).fetchall()
+            tasks = []
+            for r in rows:
+                t = dict(r)
+                if t.get("dependencies_json"):
+                    t["dependencies"] = json.loads(t["dependencies_json"])
+                if t.get("requirements_json"):
+                    t["requirements"] = json.loads(t["requirements_json"])
+                if t.get("metadata_json"):
+                    t["metadata"] = json.loads(t["metadata_json"])
+                tasks.append(t)
+            return tasks
+
+    def get_batch_task(self, batch_id: str, task_key: str) -> Optional[Dict[str, Any]]:
+        """Get a single task by batch_id and task_key."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM batch_tasks WHERE batch_id = ? AND task_key = ?",
+                (batch_id, task_key),
+            ).fetchone()
+            if not row:
+                return None
+            t = dict(row)
+            if t.get("dependencies_json"):
+                t["dependencies"] = json.loads(t["dependencies_json"])
+            if t.get("requirements_json"):
+                t["requirements"] = json.loads(t["requirements_json"])
+            if t.get("metadata_json"):
+                t["metadata"] = json.loads(t["metadata_json"])
+            return t
+
+    def update_batch_status(
+        self,
+        batch_id: str,
+        status: str,
+        error_message: Optional[str] = None,
+        started_at: Optional[float] = None,
+        completed_at: Optional[float] = None,
+    ) -> None:
+        """Update batch status and timestamps."""
+        with self._get_conn() as conn:
+            updates = ["status = ?"]
+            params: List[Any] = [status.upper()]
+
+            if error_message is not None:
+                updates.append("error_message = ?")
+                params.append(error_message)
+            if started_at is not None:
+                updates.append("started_at = ?")
+                params.append(started_at)
+            if completed_at is not None:
+                updates.append("completed_at = ?")
+                params.append(completed_at)
+
+            params.append(batch_id)
+            query = f"UPDATE batches SET {', '.join(updates)} WHERE id = ?"
+            conn.execute(query, params)
+            conn.commit()
+
+    def update_batch_task(self, task_id: str, **fields: Any) -> None:
+        """Dynamically update task fields with transactional lease safety."""
+        if not fields:
+            return
+
+        with self._get_conn() as conn:
+            updates = []
+            params: List[Any] = []
+
+            for k, v in fields.items():
+                if k in ("dependencies", "requirements", "metadata") and isinstance(v, (dict, list)):
+                    updates.append(f"{k}_json = ?")
+                    params.append(json.dumps(v))
+                else:
+                    updates.append(f"{k} = ?")
+                    params.append(v)
+
+            params.append(task_id)
+            query = f"UPDATE batch_tasks SET {', '.join(updates)} WHERE id = ?"
+            conn.execute(query, params)
+            conn.commit()
+
+    def cancel_batch(self, batch_id: str) -> Dict[str, Any]:
+        """Cancel a running batch and terminate active remote processes."""
+        batch = self.get_batch(batch_id)
+        now = time.time()
+
+        for task in batch.get("tasks", []):
+            if task.get("status") == "RUNNING" and task.get("job_id"):
+                try:
+                    self.cancel_job(task["job_id"])
+                except Exception:
+                    pass
+                self.update_batch_task(
+                    task["id"],
+                    status="CANCELLED",
+                    completed_at=now,
+                    error_message="Batch cancelled by user.",
+                )
+            elif task.get("status") in ("PENDING", "READY"):
+                self.update_batch_task(
+                    task["id"],
+                    status="CANCELLED",
+                    completed_at=now,
+                    error_message="Batch cancelled by user.",
+                )
+
+        self.update_batch_status(
+            batch_id,
+            status="CANCELLED",
+            completed_at=now,
+            error_message="Batch cancelled by user.",
+        )
+        return self.get_batch(batch_id)
+
+    def retry_batch(self, batch_id: str) -> Dict[str, Any]:
+        """Reset failed or skipped tasks to PENDING for re-execution."""
+        batch = self.get_batch(batch_id)
+
+        with self._get_conn() as conn:
+            conn.execute("""
+                UPDATE batch_tasks
+                SET status = 'PENDING', exit_code = NULL, error_message = NULL,
+                    job_id = NULL, assigned_pod = NULL, completed_at = NULL
+                WHERE batch_id = ? AND status IN ('FAILED', 'SKIPPED')
+            """, (batch_id,))
+
+            conn.execute("""
+                UPDATE batches
+                SET status = 'PENDING', completed_at = NULL, error_message = NULL
+                WHERE id = ?
+            """, (batch_id,))
+            conn.commit()
+
+        return self.get_batch(batch_id)
+
+    def record_notification(
+        self,
+        batch_id: str,
+        event_type: str,
+        webhook_url: str,
+        payload: Dict[str, Any],
+        status: str,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Record an outbound notification event."""
+        now = time.time()
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO notifications (
+                    batch_id, event_type, webhook_url, payload_json,
+                    status, attempts, last_attempt_at, error_message, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                batch_id,
+                event_type,
+                webhook_url,
+                json.dumps(payload),
+                status,
+                1,
+                now,
+                error_message,
+                now,
+            ))
+            conn.commit()
+
+    def list_notifications(
+        self,
+        batch_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List outbound notification logs."""
+        with self._get_conn() as conn:
+            query = "SELECT * FROM notifications"
+            params: List[Any] = []
+            if batch_id:
+                query += " WHERE batch_id = ?"
+                params.append(batch_id)
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+
+            rows = conn.execute(query, params).fetchall()
+            logs = []
+            for r in rows:
+                d = dict(r)
+                if d.get("payload_json"):
+                    d["payload"] = json.loads(d["payload_json"])
+                logs.append(d)
+            return logs
+

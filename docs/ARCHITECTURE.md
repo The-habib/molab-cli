@@ -92,10 +92,62 @@ Long-running compute jobs (4K video rendering, LLM fine-tuning, batch inference)
 
 ## 5. Model Context Protocol (MCP) Integration
 
-`molab mcp` implements the official JSON-RPC 2.0 stdio MCP specification (2024-11-05). It exposes 15 typed tools across:
+`molab mcp` implements the official JSON-RPC 2.0 stdio MCP specification (2024-11-05). It exposes 19 typed tools across:
 - **Discovery:** `molab_doctor`, `molab_capabilities`, `molab_list_pods`, `molab_get_free_pod`, `molab_gpu_telemetry`.
 - **Execution & Storage:** `molab_execute`, `molab_push_file`, `molab_pull_file`, `molab_sync_directory`.
 - **Jobs & Workloads:** `molab_job_submit`, `molab_job_status`, `molab_job_logs`, `molab_job_cancel`, `molab_run_workload`, `molab_service_status`.
+- **Batch Orchestration:** `molab_batch_validate`, `molab_batch_submit`, `molab_batch_status`, `molab_batch_cancel`.
 
 This allows Claude, Cursor, Antigravity, and any MCP-compliant agent to orchestrate 96GB Blackwell GPU pods natively without custom shell scripting.
+
+---
+
+## 6. Multi-Pod Autonomous Orchestration Engine (v2.2)
+
+The Multi-Pod Orchestration Engine (`molab_cli/scheduler.py`, `molab_cli/notifications.py`) elevates `molab-cli` from single-job tracking to multi-pod pipeline coordination:
+
+```
+                      +-----------------------------+
+                      | Batch Manifest (batch.json) |
+                      +-----------------------------+
+                                     │
+                                     ▼
+                      +-----------------------------+
+                      |   DAG & Cycle Validation    |
+                      |   (Kahn's Topological Sort) |
+                      +-----------------------------+
+                                     │
+                 ┌───────────────────┴───────────────────┐
+                 ▼                                       ▼
+      Stage 1 (Parallel Tasks)                Stage 2 (Dependent Tasks)
+                 │                                       │
+                 ▼                                       ▼
+    +─────────────────────────+             +─────────────────────────+
+    | Resource-Aware Matcher  |             | Resource-Aware Matcher  |
+    | (CUDA, Headroom, Load)  |             | (CUDA, Headroom, Load)  |
+    +─────────────────────────+             +─────────────────────────+
+                 │                                       │
+                 ├───────────────────┬───────────────────┤
+                 ▼                   ▼                   ▼
+          [Pod A: 96GB GPU]   [Pod B: 96GB GPU]   [Pod C: 96GB GPU]
+```
+
+### 6.1 Explainable Resource-Aware Scheduling
+- **Zero Hardcoded Pod IDs or GPU Model Names:** Dynamically queries live telemetry across running sandboxes via `torch.cuda.mem_get_info()` and process audits.
+- **Header Selection Audit:** Every candidate pod evaluation produces an explainable reason trace:
+  - Acceptance: `Free VRAM satisfies requirement (94.4 GB free >= 16.0 GB requested)` + idle priority bonus.
+  - Rejection: Insufficient VRAM, active server occupancy, offline state, or missing CUDA.
+- **Priority Scoring:** Ranks eligible pods by free memory headroom and least concurrent allocations.
+
+### 6.2 Transactional Batch State Machine
+Stored in SQLite tables `batches` and `batch_tasks`:
+- Task lifecycle: `PENDING → READY → RUNNING → COMPLETED / FAILED / SKIPPED / CANCELLED`.
+- Dynamic DAG Propagation: When prerequisites succeed, dependent tasks transition to `READY`. If a dependency fails and exhausts its `max_attempts`, downstream tasks are safely marked `SKIPPED`.
+- Lease and Concurrency Control: Concurrency caps (`--max-parallel`) are strictly enforced at runtime.
+
+### 6.3 Isolated Webhook Notifications
+- **Multi-Platform Support:** Automatically formats JSON payloads for generic HTTPS webhooks, Discord embeds (with color status coding), and Telegram bot endpoints.
+- **Sensitive Credential Redaction:** Recursively sanitizes payloads, replacing auth cookies (`__client=`), Bearer tokens, and secrets with `[REDACTED]`.
+- **Fault Isolation:** Webhook connection timeouts and HTTP errors never disrupt running compute pipelines. All outbound notification attempts are audited in the `notifications` table.
+
 

@@ -10,6 +10,7 @@ from molab_cli.client import MoLabClient
 from molab_cli.execution import ExecutionResult, RemoteExecutor
 from molab_cli.jobs import JobManager
 from molab_cli.sandbox import SandboxSession
+from molab_cli.scheduler import BatchOrchestrator, ValidationResult
 from molab_cli.services import ServiceManager
 from molab_cli.transfer import TransferManager
 from molab_cli.workloads import WorkloadRegistry
@@ -115,6 +116,11 @@ class MoLabSDK:
         self.client = client or MoLabClient()
         self.job_manager = JobManager(db_path=db_path)
         self.workload_registry = WorkloadRegistry()
+        self.orchestrator = BatchOrchestrator(
+            client=self.client,
+            job_manager=self.job_manager,
+            workload_registry=self.workload_registry,
+        )
 
     def doctor(self) -> Dict[str, Any]:
         """Run system diagnostics."""
@@ -165,3 +171,47 @@ class MoLabSDK:
     def cancel_job(self, job_id: str) -> Dict[str, Any]:
         """Cancel a running job."""
         return self.job_manager.cancel_job(job_id)
+
+    # -------------------------------------------------------------------------
+    # Batch Orchestration Subsystem
+    # -------------------------------------------------------------------------
+
+    def validate_batch(self, manifest: Dict[str, Any]) -> ValidationResult:
+        """Validate batch workload manifest schema and dependency DAG."""
+        return self.orchestrator.validate(manifest)
+
+    def submit_batch(self, manifest: Dict[str, Any], concurrency_limit: Optional[int] = None) -> str:
+        """Validate and submit batch workload manifest for execution."""
+        return self.orchestrator.submit(manifest, concurrency_limit=concurrency_limit)
+
+    def run_batch(
+        self,
+        batch_id: str,
+        max_parallel: Optional[int] = None,
+        timeout: Optional[float] = None,
+        poll_interval: float = 3.0,
+    ) -> Dict[str, Any]:
+        """Execute a submitted batch pipeline across candidate pods."""
+        return self.orchestrator.run_batch(
+            batch_id,
+            max_parallel=max_parallel,
+            timeout=timeout,
+            poll_interval=poll_interval,
+        )
+
+    def get_batch(self, batch_id: str) -> Dict[str, Any]:
+        """Retrieve batch state and tasks list."""
+        return self.job_manager.get_batch(batch_id)
+
+    def list_batches(self, limit: int = 50, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List historic and active batches."""
+        return self.job_manager.list_batches(limit=limit, status=status)
+
+    def cancel_batch(self, batch_id: str) -> Dict[str, Any]:
+        """Cancel a running batch."""
+        return self.orchestrator.job_manager.cancel_batch(batch_id)
+
+    def retry_batch(self, batch_id: str) -> Dict[str, Any]:
+        """Retry failed or skipped tasks in a batch."""
+        return self.orchestrator.job_manager.retry_batch(batch_id)
+

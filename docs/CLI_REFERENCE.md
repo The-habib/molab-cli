@@ -325,3 +325,102 @@ Launch the JSON-RPC 2.0 stdio MCP server for seamless integration with AI agents
   molab mcp
   ```
 
+---
+
+## 11. Multi-Pod Batch Pipelines
+
+### `molab batch validate <manifest.json>`
+Validate schema, task specifications, and DAG dependency structure. Displays topological execution stages.
+* **Flags:**
+  * `-j, --json`: Output validation result as JSON.
+* **Example:**
+  ```bash
+  molab batch validate pipeline.json
+  molab batch validate pipeline.json --json
+  ```
+
+### `molab batch submit <manifest.json>`
+Submit a batch manifest into the SQLite persistent queue without executing immediately.
+* **Options:**
+  * `-p, --max-parallel <int>`: Max parallel tasks allowed.
+  * `-j, --json`: Output batch ID and status as JSON.
+* **Example:**
+  ```bash
+  molab batch submit pipeline.json -p 4
+  ```
+
+### `molab batch run <manifest_or_id>`
+Execute an autonomous multi-pod pipeline with dynamic scheduling, task progression, and live telemetry updates.
+* **Options:**
+  * `-p, --max-parallel <int>`: Concurrency cap across pods.
+  * `--poll <seconds>`: Status polling interval (Default: 3.0s).
+  * `--timeout <seconds>`: Overall execution timeout.
+  * `-j, --json`: Stream output summary as JSON.
+* **Example:**
+  ```bash
+  molab batch run pipeline.json
+  molab batch run batch_cb8c7e43 --poll 2.0
+  ```
+
+### `molab batch list`
+List historic and active batch pipelines with task completion ratios.
+* **Options:**
+  * `-n, --limit <int>`: Maximum batches to list (Default: 20).
+  * `-s, --status <text>`: Filter by status (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`).
+  * `-j, --json`: Machine-readable JSON output.
+* **Example:**
+  ```bash
+  molab batch list
+  molab batch list --status COMPLETED
+  ```
+
+### `molab batch status <batch_id>`
+Display batch overview card and breakdown table of constituent tasks.
+* **Flags:**
+  * `-j, --json`: Full JSON record with all task details.
+* **Example:**
+  ```bash
+  molab batch status batch_cb8c7e43
+  ```
+
+### `molab batch logs <batch_id>`
+View remote execution logs for constituent tasks.
+* **Options:**
+  * `-t, --task <key>`: Tail logs for a specific task key.
+  * `-n, --tail <int>`: Lines to read (Default: 100).
+* **Example:**
+  ```bash
+  molab batch logs batch_cb8c7e43
+  molab batch logs batch_cb8c7e43 --task gpu_verify -n 50
+  ```
+
+### `molab batch cancel <batch_id>`
+Terminate all active remote processes and cancel pending tasks in the pipeline.
+* **Example:**
+  ```bash
+  molab batch cancel batch_cb8c7e43
+  ```
+
+### `molab batch retry <batch_id>`
+Reset failed or skipped tasks to `PENDING` so the batch can be resumed.
+* **Example:**
+  ```bash
+  molab batch retry batch_cb8c7e43
+  ```
+
+---
+
+## 12. Webhook Notifications
+
+### `molab notify test`
+Send a sanitized test webhook notification to verify endpoint connectivity.
+* **Options:**
+  * `-u, --url <url>`: Target webhook endpoint (HTTPS, Discord, Telegram).
+  * `-e, --event <name>`: Custom event name (Default: `test_notification`).
+  * `-j, --json`: JSON response status.
+* **Example:**
+  ```bash
+  molab notify test --url https://discord.com/api/webhooks/...
+  ```
+
+

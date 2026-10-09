@@ -15,6 +15,7 @@ from molab_cli.client import MoLabClient
 from molab_cli.execution import RemoteExecutor
 from molab_cli.jobs import JobManager
 from molab_cli.sandbox import SandboxSession
+from molab_cli.scheduler import BatchOrchestrator
 from molab_cli.services import ServiceManager
 from molab_cli.transfer import TransferManager
 from molab_cli.workloads import WorkloadRegistry
@@ -27,6 +28,11 @@ class MoLabMCPServer:
         self.client = MoLabClient()
         self.job_manager = JobManager()
         self.workload_registry = WorkloadRegistry()
+        self.orchestrator = BatchOrchestrator(
+            client=self.client,
+            job_manager=self.job_manager,
+            workload_registry=self.workload_registry,
+        )
 
     def get_tool_definitions(self) -> List[Dict[str, Any]]:
         """Return MCP compliant tool specifications."""
@@ -203,6 +209,51 @@ class MoLabMCPServer:
                     "required": ["workload_name", "notebook_id", "params"],
                 },
             },
+            {
+                "name": "molab_batch_validate",
+                "description": "Validate a batch workload pipeline manifest (JSON schema and DAG dependencies).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "manifest": {"type": "object", "description": "Manifest JSON object"},
+                        "manifest_path": {"type": "string", "description": "Path to batch manifest JSON file"},
+                    },
+                },
+            },
+            {
+                "name": "molab_batch_submit",
+                "description": "Submit a multi-task batch pipeline manifest for autonomous multi-pod scheduling.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "manifest": {"type": "object", "description": "Manifest JSON object"},
+                        "manifest_path": {"type": "string", "description": "Path to batch manifest JSON file"},
+                        "concurrency_limit": {"type": "integer", "description": "Max parallel tasks across pods"},
+                    },
+                },
+            },
+            {
+                "name": "molab_batch_status",
+                "description": "Query batch status, progress counts, and per-task state.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "batch_id": {"type": "string", "description": "Batch pipeline ID (e.g. batch_xxx)"},
+                    },
+                    "required": ["batch_id"],
+                },
+            },
+            {
+                "name": "molab_batch_cancel",
+                "description": "Cancel a running batch pipeline and terminate all remote processes.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "batch_id": {"type": "string", "description": "Batch pipeline ID to cancel"},
+                    },
+                    "required": ["batch_id"],
+                },
+            },
         ]
 
     def execute_tool(self, name: str, args: Dict[str, Any]) -> Any:
@@ -307,6 +358,30 @@ class MoLabMCPServer:
                 params=args["params"],
                 job_manager=self.job_manager,
             )
+
+        elif name == "molab_batch_validate":
+            manifest = args.get("manifest")
+            if not manifest and args.get("manifest_path"):
+                with open(args["manifest_path"], "r") as f:
+                    manifest = json.load(f)
+            return self.orchestrator.validate(manifest or {}).to_dict()
+
+        elif name == "molab_batch_submit":
+            manifest = args.get("manifest")
+            if not manifest and args.get("manifest_path"):
+                with open(args["manifest_path"], "r") as f:
+                    manifest = json.load(f)
+            batch_id = self.orchestrator.submit(
+                manifest or {},
+                concurrency_limit=args.get("concurrency_limit"),
+            )
+            return {"batch_id": batch_id, "status": "SUBMITTED"}
+
+        elif name == "molab_batch_status":
+            return self.job_manager.get_batch(args["batch_id"])
+
+        elif name == "molab_batch_cancel":
+            return self.orchestrator.job_manager.cancel_batch(args["batch_id"])
 
         raise ValueError(f"Unknown tool: {name}")
 
