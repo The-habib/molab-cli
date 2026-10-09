@@ -423,4 +423,79 @@ Send a sanitized test webhook notification to verify endpoint connectivity.
   molab notify test --url https://discord.com/api/webhooks/...
   ```
 
+---
+
+## 13. Native Marimo Backend Subsystem
+
+Direct REST and WebSocket integration with the running Marimo instance on pod port 8080.
+
+### `molab usage <notebook_id>`
+Query real-time host RAM, server RAM, kernel RAM, host CPU usage, and GPU memory telemetry.
+* **Flags:**
+  * `-j, --json`: Output full telemetry dictionary as JSON.
+* **Example:**
+  ```bash
+  molab usage nb_emuqXoWkVed6jPNZxND7eo
+  molab usage nb_emuqXoWkVed6jPNZxND7eo --json
+  ```
+
+### `molab export <format> <notebook_id>`
+Export reactive notebooks directly via remote server exporter without requiring local Pandoc/Typst/Jupyter tools.
+* **Subcommands:**
+  * `html`: Export to self-contained interactive HTML (`-o <file>`, `--no-code`).
+  * `md`: Export to Markdown format (`-o <file>`).
+  * `ipynb`: Export to standard Jupyter Notebook format (`-o <file>`).
+  * `script`: Export to clean Python script (`-o <file>`).
+  * `pdf`: Export to PDF format (`-o <file>`).
+* **Example:**
+  ```bash
+  molab export html nb_xxx -o report.html
+  molab export md nb_xxx -o notes.md
+  molab export ipynb nb_xxx -o notebook.ipynb
+  molab export script nb_xxx -o script.py
+  ```
+
+### `molab file <subcommand> <notebook_id> [args]`
+Perform instant server-side file operations directly on the pod.
+* **Subcommands:**
+  * `ls <id> [path]`: List files and folders with type, size, and paths (`-j, --json`).
+  * `cat <id> <path>`: Print text contents of remote file directly to terminal.
+  * `info <id> <path>`: View file metadata, MIME type, and size (`-j, --json`).
+  * `cp <id> <src> <dst>`: Instant server-side copy without client bandwidth.
+  * `mv <id> <src> <dst>`: Instant server-side rename/move.
+  * `rm <id> <path>`: Delete file or directory on pod (`-y, --yes`).
+  * `search <id> <query>`: Recursive search (`--path <dir>`, `--depth <int>`, `--limit <int>`, `-j`).
+* **Example:**
+  ```bash
+  molab file ls nb_xxx /workspace
+  molab file cat nb_xxx /workspace/config.yaml
+  molab file cp nb_xxx /workspace/model.pt /workspace/model_bak.pt
+  molab file search nb_xxx "weights" --path /workspace
+  ```
+
+### `molab kernel <subcommand> <notebook_id> [args]`
+Interact directly with the remote Python kernel without terminal PTY buffers.
+* **Subcommands:**
+  * `status <id>`: Query whether kernel is idle or running (`-j, --json`).
+  * `eval <id> <code>`: Evaluate Python code directly in kernel, capturing stdout/stderr and output (`--timeout <sec>`, `-j, --json`).
+  * `restart <id>`: Soft-restart kernel without restarting container pod.
+  * `interrupt <id>`: Interrupt running computation cell.
+* **Example:**
+  ```bash
+  molab kernel status nb_xxx
+  molab kernel eval nb_xxx "import torch; print(torch.cuda.is_available())"
+  molab kernel restart nb_xxx
+  ```
+
+### `molab pkg <subcommand> <notebook_id> [args]`
+Inspect and manage Python packages natively on the pod.
+* **Subcommands:**
+  * `list <id>`: List installed packages (`-j, --json`).
+  * `add <id> <package_name>`: Install Python package natively (`--upgrade`).
+* **Example:**
+  ```bash
+  molab pkg list nb_xxx --json
+  molab pkg add nb_xxx torchaudio --upgrade
+  ```
+
 

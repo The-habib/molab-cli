@@ -3,8 +3,9 @@ High-Level Typed Python SDK for MoLab Cloud GPU Orchestration.
 Reuses the exact same core execution, transfer, capability, and job subsystems.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
+from molab_cli.backend import MarimoBackendClient
 from molab_cli.capabilities import discover_capabilities, run_doctor
 from molab_cli.client import MoLabClient
 from molab_cli.execution import ExecutionResult, RemoteExecutor
@@ -26,6 +27,7 @@ class Pod:
         self.transfer = TransferManager(self.session)
         self.services = ServiceManager(self.session)
         self._job_manager = job_manager or JobManager()
+        self._backend: Optional[MarimoBackendClient] = None
 
     def resolve(self) -> None:
         self.session.resolve()
@@ -107,6 +109,83 @@ class Pod:
     def start_service(self, model: str = "gemma-3-27b", port: int = 8000) -> Dict[str, Any]:
         """Start and verify model server."""
         return self.services.start_model_service(model=model, port=port)
+
+    # -------------------------------------------------------------------------
+    # Native Marimo Backend Subsystem
+    # -------------------------------------------------------------------------
+
+    @property
+    def backend(self) -> MarimoBackendClient:
+        """High-speed native REST & WebSocket Marimo backend client."""
+        if self._backend is None:
+            self._backend = MarimoBackendClient(self.session)
+        return self._backend
+
+    def usage(self) -> Dict[str, Any]:
+        """Query real-time host RAM, server RAM, kernel RAM, and GPU memory."""
+        return self.backend.get_usage()
+
+    def export(
+        self,
+        format_type: str = "html",
+        file_key: str = "notebook.py",
+        include_code: bool = True,
+    ) -> Union[str, bytes]:
+        """Export reactive notebook to HTML, Markdown, IPYNB, Script, or PDF via remote Marimo backend."""
+        return self.backend.export_notebook(
+            format_type=format_type, file_key=file_key, include_code=include_code
+        )
+
+    def eval(
+        self,
+        code: str,
+        file_key: str = "notebook.py",
+        timeout: float = 30.0,
+    ) -> Dict[str, Any]:
+        """Execute Python code directly in remote Marimo kernel without terminal PTY."""
+        return self.backend.eval_python(code=code, file_key=file_key, timeout=timeout)
+
+    def kernel_status(self, file_key: str = "notebook.py") -> Dict[str, Any]:
+        """Get kernel running/idle state."""
+        return self.backend.get_kernel_status(file_key=file_key)
+
+    def restart_kernel(self, file_key: str = "notebook.py") -> bool:
+        """Soft-restart remote Python kernel."""
+        return self.backend.restart_kernel(file_key=file_key)
+
+    def interrupt_kernel(self, file_key: str = "notebook.py") -> bool:
+        """Interrupt active execution in remote kernel."""
+        return self.backend.interrupt_kernel(file_key=file_key)
+
+    def list_remote_files(self, path: str = ".") -> List[Dict[str, Any]]:
+        """List files and folders directly via native REST API."""
+        return self.backend.list_files(path=path)
+
+    def read_remote_file(self, path: str) -> str:
+        """Read remote file contents via native REST API."""
+        return self.backend.read_file(path=path)
+
+    def update_remote_file(self, path: str, contents: str) -> bool:
+        """Update remote file contents via native REST API."""
+        return self.backend.update_file(path=path, contents=contents)
+
+    def search_remote_files(
+        self,
+        query: str,
+        path: Optional[str] = None,
+        depth: int = 5,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Search files on pod via native REST API."""
+        return self.backend.search_files(query=query, path=path, depth=depth, limit=limit)
+
+    def list_packages(self) -> List[Dict[str, Any]]:
+        """List installed packages via native REST API."""
+        return self.backend.list_packages()
+
+    def add_package(self, package_name: str, upgrade: bool = False) -> Dict[str, Any]:
+        """Install package via native REST API."""
+        return self.backend.add_package(package_name=package_name, upgrade=upgrade)
 
 
 class MoLabSDK:

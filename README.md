@@ -14,8 +14,9 @@
   <a href="#"><img src="https://img.shields.io/badge/GPU-NVIDIA%20Blackwell%20(96GB%20VRAM)-76b900.svg" alt="GPU"></a>
   <a href="#"><img src="https://img.shields.io/badge/Transfer-Native%20HTTP%2F2%20Streaming-success.svg" alt="File Transfer"></a>
   <a href="#"><img src="https://img.shields.io/badge/Jobs-SQLite%20DAG%20%26%20Batch%20Queue-orange.svg" alt="Jobs"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(19%20Tools)-purple.svg" alt="MCP"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-60%20Passed%20(100%25)-success.svg" alt="Tests"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Backend-Native%20Marimo%20REST%20%26%20Kernel%20Eval-blueviolet.svg" alt="Backend"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(29%20Tools)-purple.svg" alt="MCP"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-75%20Passed%20(100%25)-success.svg" alt="Tests"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-Termux%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
@@ -80,6 +81,7 @@ Provide AI agents in Cursor, Claude Desktop, and Antigravity with native capabil
 |   ├── notifications.py : Isolated HTTPS/Discord webhooks with secret redaction|
 |   ├── mcp.py           : Model Context Protocol (MCP) JSON-RPC 2.0 Server     |
 |   ├── transfer.py      : Native HTTP streaming, SHA-256 manifests & sync     |
+|   ├── backend.py       : Native Marimo REST & WebSocket client (export, eval, files)|
 |   ├── workloads.py     : Pluggable AI workload templates & parameter schemas  |
 |   ├── services.py      : Model server lifecycle & application health checks   |
 |   └── sdk.py           : High-level typed Python SDK for automated scripts    |
@@ -279,6 +281,40 @@ molab forward <id> --port 8000
 molab chat <id>
 ```
 
+### 7. Native Marimo Backend, Kernel Eval & Server-Side Files
+Direct REST and WebSocket integration with the remote Marimo server (port 8080):
+```bash
+# Real-time host memory telemetry, server RAM, kernel RAM, and GPU breakdown:
+molab usage <id>
+molab usage <id> --json
+
+# Native notebook export without local dependencies (HTML, Markdown, IPYNB, Script, PDF):
+molab export html <id> -o notebook.html
+molab export md <id> -o notebook.md
+molab export ipynb <id> -o notebook.ipynb
+molab export script <id> -o notebook.py
+molab export pdf <id> -o notebook.pdf
+
+# Native server-side file management:
+molab file ls <id> /workspace --json
+molab file cat <id> /workspace/script.py
+molab file info <id> /workspace/model.pt
+molab file cp <id> /workspace/model.pt /workspace/model_backup.pt
+molab file mv <id> /workspace/old.txt /workspace/new.txt
+molab file rm <id> /workspace/temp.log
+molab file search <id> "checkpoint" --path /workspace
+
+# Direct kernel evaluation & management (bypasses terminal PTY):
+molab kernel status <id>
+molab kernel eval <id> "import torch; print(torch.cuda.get_device_name(0))"
+molab kernel restart <id>
+molab kernel interrupt <id>
+
+# Native package management:
+molab pkg list <id> --json
+molab pkg add <id> flash-attn --upgrade
+```
+
 ---
 
 ## 🤖 Model Context Protocol (MCP) Integration
@@ -296,7 +332,7 @@ molab chat <id>
 }
 ```
 
-### Exposed MCP Tools (19 Typed Tools):
+### Exposed MCP Tools (29 Typed Tools):
 - **`molab_doctor`**: Diagnose environment health and connectivity.
 - **`molab_capabilities`**: Discover supported hardware, storage, and runtimes.
 - **`molab_list_pods`**: List all notebooks and active sandboxes.
@@ -316,6 +352,16 @@ molab chat <id>
 - **`molab_batch_submit`**: Submit multi-task pipeline for execution.
 - **`molab_batch_status`**: Inspect batch progress and task status.
 - **`molab_batch_cancel`**: Cancel running batch pipeline.
+- **`molab_usage`**: Real-time cgroup host RAM, server RAM, kernel RAM, and GPU breakdown.
+- **`molab_export_notebook`**: Export reactive notebook to HTML, Markdown, IPYNB, Script, or PDF.
+- **`molab_kernel_eval`**: Execute Python code directly in remote Marimo kernel without PTY buffer.
+- **`molab_kernel_status`**: Query remote Python kernel state (idle vs running).
+- **`molab_kernel_restart`**: Soft-restart remote kernel without restarting pod container.
+- **`molab_kernel_interrupt`**: Interrupt active execution in remote kernel.
+- **`molab_file_list`**: List files and directories via native HTTP JSON endpoint.
+- **`molab_file_details`**: Fetch metadata, mime type, and readable text contents.
+- **`molab_file_search`**: Fast server-side recursive file and directory search.
+- **`molab_pkg_list`**: List installed Python packages via native Marimo package manager.
 
 ---
 

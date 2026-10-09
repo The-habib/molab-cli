@@ -10,6 +10,7 @@ import sys
 import traceback
 from typing import Any, Dict, List, Optional
 
+from molab_cli.backend import MarimoBackendClient
 from molab_cli.capabilities import discover_capabilities, run_doctor
 from molab_cli.client import MoLabClient
 from molab_cli.execution import RemoteExecutor
@@ -254,6 +255,135 @@ class MoLabMCPServer:
                     "required": ["batch_id"],
                 },
             },
+            {
+                "name": "molab_usage",
+                "description": "Query real-time host RAM, server RAM, kernel RAM, CPU utilization, and GPU memory telemetry directly from remote Marimo backend.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_export_notebook",
+                "description": "Export reactive Marimo notebook directly to HTML, Markdown, IPYNB, Script, or PDF via native Marimo server exporter.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "format_type": {
+                            "type": "string",
+                            "enum": ["html", "markdown", "ipynb", "script", "pdf"],
+                            "description": "Export target format (default: html)",
+                        },
+                        "file_key": {"type": "string", "description": "Notebook filename (default: notebook.py)"},
+                        "include_code": {"type": "boolean", "description": "Include source code cells in export (default: true)"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_kernel_eval",
+                "description": "Execute Python code directly inside the remote Marimo Python kernel without terminal PTY buffers, capturing stdout, stderr, and MIME output.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "code": {"type": "string", "description": "Python code snippet to execute"},
+                        "file_key": {"type": "string", "description": "Notebook context filename (default: notebook.py)"},
+                        "timeout": {"type": "number", "description": "Evaluation timeout in seconds (default: 30.0)"},
+                    },
+                    "required": ["notebook_id", "code"],
+                },
+            },
+            {
+                "name": "molab_kernel_status",
+                "description": "Query running vs idle state of the remote Python kernel on the pod.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "file_key": {"type": "string", "description": "Notebook filename (default: notebook.py)"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_kernel_restart",
+                "description": "Soft-restart the remote Marimo Python kernel without terminating the pod container.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "file_key": {"type": "string", "description": "Notebook filename (default: notebook.py)"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_kernel_interrupt",
+                "description": "Interrupt any active execution in the remote Marimo Python kernel.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "file_key": {"type": "string", "description": "Notebook filename (default: notebook.py)"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_file_list",
+                "description": "List files and directories directly over native HTTP JSON endpoint on the remote pod.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "path": {"type": "string", "description": "Path to list (default: .)"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_file_details",
+                "description": "Fetch metadata, mime type, and readable text contents of a file on the remote pod.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "path": {"type": "string", "description": "Path to file"},
+                    },
+                    "required": ["notebook_id", "path"],
+                },
+            },
+            {
+                "name": "molab_file_search",
+                "description": "Fast server-side recursive file and directory search on the remote pod.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "query": {"type": "string", "description": "Search pattern or string"},
+                        "path": {"type": "string", "description": "Search root directory (default: current directory)"},
+                        "depth": {"type": "integer", "description": "Maximum directory search depth (default: 5)"},
+                        "limit": {"type": "integer", "description": "Maximum number of matched files (default: 100)"},
+                    },
+                    "required": ["notebook_id", "query"],
+                },
+            },
+            {
+                "name": "molab_pkg_list",
+                "description": "List Python packages installed on the remote pod via native Marimo package manager.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
         ]
 
     def execute_tool(self, name: str, args: Dict[str, Any]) -> Any:
@@ -382,6 +512,76 @@ class MoLabMCPServer:
 
         elif name == "molab_batch_cancel":
             return self.orchestrator.job_manager.cancel_batch(args["batch_id"])
+
+        elif name == "molab_usage":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            backend = MarimoBackendClient(session)
+            return backend.get_usage()
+
+        elif name == "molab_export_notebook":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            backend = MarimoBackendClient(session)
+            fmt = args.get("format_type", "html")
+            content = backend.export_notebook(
+                format_type=fmt,
+                file_key=args.get("file_key", "notebook.py"),
+                include_code=args.get("include_code", True),
+            )
+            is_str = isinstance(content, str)
+            return {
+                "format": fmt,
+                "length": len(content),
+                "content": content if is_str else f"<binary {len(content)} bytes>",
+            }
+
+        elif name == "molab_kernel_eval":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            backend = MarimoBackendClient(session)
+            return backend.eval_python(
+                code=args["code"],
+                file_key=args.get("file_key", "notebook.py"),
+                timeout=float(args.get("timeout", 30.0)),
+            )
+
+        elif name == "molab_kernel_status":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            backend = MarimoBackendClient(session)
+            return backend.get_kernel_status(file_key=args.get("file_key", "notebook.py"))
+
+        elif name == "molab_kernel_restart":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            backend = MarimoBackendClient(session)
+            return {"success": backend.restart_kernel(file_key=args.get("file_key", "notebook.py"))}
+
+        elif name == "molab_kernel_interrupt":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            backend = MarimoBackendClient(session)
+            return {"success": backend.interrupt_kernel(file_key=args.get("file_key", "notebook.py"))}
+
+        elif name == "molab_file_list":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            backend = MarimoBackendClient(session)
+            return backend.list_files(path=args.get("path", "."))
+
+        elif name == "molab_file_details":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            backend = MarimoBackendClient(session)
+            return backend.file_details(path=args["path"])
+
+        elif name == "molab_file_search":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            backend = MarimoBackendClient(session)
+            return backend.search_files(
+                query=args["query"],
+                path=args.get("path"),
+                depth=int(args.get("depth", 5)),
+                limit=int(args.get("limit", 100)),
+            )
+
+        elif name == "molab_pkg_list":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            backend = MarimoBackendClient(session)
+            return backend.list_packages()
 
         raise ValueError(f"Unknown tool: {name}")
 

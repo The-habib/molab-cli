@@ -80,7 +80,14 @@ job = pod.submit_job(
 )
 print("Submitted Job:", job["id"])
 
-# 5. Poll status and download artifacts
+# 5. Native backend evaluation & exports
+usage = pod.usage()
+print("Real-time GPU & Host RAM:", usage["used_gb"], "/", usage["total_gb"], "GB")
+
+eval_res = pod.eval("import torch; torch.cuda.get_device_name(0)")
+print("Kernel Eval Output:", eval_res["output_text"])
+
+# 6. Poll status and download artifacts
 status = sdk.get_job(job["id"])
 if status["status"] == "COMPLETED":
     sdk.job_manager.download_artifacts(job["id"], "./downloaded_artifacts")
@@ -98,7 +105,7 @@ Any MCP-compatible client (Claude Desktop, Cursor, Antigravity) can connect dire
   }
 }
 ```
-Exposes 19 typed tools for pod discovery, command execution, streaming transfers, job tracking, and batch pipeline orchestration (`molab_batch_validate`, `molab_batch_submit`, `molab_batch_status`, `molab_batch_cancel`).
+Exposes 29 typed tools for pod discovery, command execution, streaming transfers, SQLite job tracking, batch pipeline orchestration, native kernel scratchpad evaluation (`molab_kernel_eval`), notebook export (`molab_export_notebook`), and server-side file management (`molab_file_list`, `molab_file_details`, `molab_file_search`).
 
 ---
 

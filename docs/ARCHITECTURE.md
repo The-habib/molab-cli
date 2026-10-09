@@ -22,6 +22,7 @@
 |   ├── sdk.py          : High-level typed Python SDK for automated scripts     |
 |   ├── services.py     : Model server lifecycle & application health checks    |
 |   ├── transfer.py     : Native HTTP streaming, SHA-256 manifests & sync      |
+|   ├── backend.py      : Native Marimo REST & WebSocket client (export, eval, files)  |
 |   ├── workloads.py    : Pluggable AI workload templates & parameter schemas   |
 |   ├── cli.py          : Click commands, Rich formatting, JSON outputs         |
 |   └── theme.py        : UI styles, banners, tables, error cards               |
@@ -149,5 +150,33 @@ Stored in SQLite tables `batches` and `batch_tasks`:
 - **Multi-Platform Support:** Automatically formats JSON payloads for generic HTTPS webhooks, Discord embeds (with color status coding), and Telegram bot endpoints.
 - **Sensitive Credential Redaction:** Recursively sanitizes payloads, replacing auth cookies (`__client=`), Bearer tokens, and secrets with `[REDACTED]`.
 - **Fault Isolation:** Webhook connection timeouts and HTTP errors never disrupt running compute pipelines. All outbound notification attempts are audited in the `notifications` table.
+
+---
+
+## 7. Native Marimo Backend & WebSocket Subsystem
+
+The remote compute container on port 8080 runs the **Marimo ASGI server** (Starlette + msgspec + Uvicorn). `molab_cli/backend.py` introduces direct communication channels that bypass the terminal PTY layer.
+
+### 7.1 Ephemeral Session Handshake Architecture
+Protected endpoints such as `/api/export/*` and `/api/kernel/*` enforce active session registration via the `Marimo-Session-Id` header:
+1. `MarimoBackendClient` creates a UUID-scoped session ID (e.g. `molab_eval_<uuid>`).
+2. An ephemeral WebSocket connection is initiated to:
+   `wss://<sandbox-id>.sb.molab.run/ws?session_id=<id>&file=notebook.py&token=<token>`
+3. Once the server accepts the connection and returns `kernel-ready`, HTTP requests carrying `Marimo-Session-Id: <id>` are authorized to dispatch scratchpad runs, export notebook state, and interrupt cells.
+4. Output frames are streamed back through the WebSocket channel in real-time.
+
+### 7.2 Kernel Scratchpad Evaluation vs Terminal PTY
+- **Terminal PTY (`/terminal/ws`):** Limited to raw ANSI bytes, subject to 4096-byte input buffer limits, and vulnerable to bash quoting/escaping failures when evaluating complex Python payloads.
+- **Kernel Scratchpad (`/api/kernel/scratchpad/run`):** Directly evaluates pure Python strings inside the resident kernel environment without spawning shell processes, cleanly capturing separate channels:
+  - `console.stdout` and `console.stderr` streams.
+  - Formatted MIME output objects (`text/html`, `text/plain`).
+  - Native execution timestamps and cell status.
+
+### 7.3 Direct Server-Side File Manipulation
+- `/api/files/list_files` & `/api/files/file_details`: Query directory listings and file metadata without local disk storage or shell parsing.
+- `/api/files/copy` & `/api/files/move`: Execute zero-bandwidth server-side duplication and relocation within the remote filesystem.
+- `/api/files/search`: Recursive file tree scanning executed server-side.
+- `/api/packages/list` & `/api/packages/add`: Native package management integrated with Marimo's dependency manager.
+
 
 

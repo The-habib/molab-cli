@@ -1424,6 +1424,534 @@ def cmd_notify_test(url: str, event: str, as_json: bool):
         console.print(f"[bold red]✘ Webhook delivery failed:[/bold red] {result.get('error')}")
 
 
+# =============================================================================
+# Native Marimo Backend Commands (Usage, Export, File, Kernel, Pkg)
+# =============================================================================
+
+@cli.command("usage")
+@click.argument("notebook_id")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output hardware usage as JSON")
+def cmd_usage(notebook_id: str, as_json: bool):
+    """Display real-time host RAM, server RAM, kernel RAM, and GPU memory telemetry."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    if not as_json:
+        with console.status("[bold cyan]Fetching real-time backend usage...[/bold cyan]"):
+            try:
+                usage = backend.get_usage()
+            except Exception as e:
+                console.print(f"[red]Error querying usage:[/red] {e}")
+                return
+    else:
+        try:
+            usage = backend.get_usage()
+        except Exception as e:
+            print(json.dumps({"error": str(e)}))
+            return
+        print(json.dumps(usage, indent=2))
+        return
+
+    table = Table(title=f"MoLab Backend Telemetry ({notebook_id})", box=box.ROUNDED)
+    table.add_column("Resource", style="cyan")
+    table.add_column("Allocation", style="bold white")
+    table.add_column("Details / Percentage", style="green")
+
+    table.add_row("Host Cgroup RAM", f"{usage['used_gb']} GB / {usage['total_gb']} GB", f"{usage['percent_used']}% used ({usage['free_gb']} GB available)")
+    table.add_row("Server Process RAM", f"{usage['server_memory_mb']} MB", "Marimo Web & API Server")
+    table.add_row("Kernel Process RAM", f"{usage['kernel_memory_mb']} MB", "Marimo Python Kernel")
+    table.add_row("Host CPU Usage", f"{usage['cpu_percent']}%", "Host container CPU")
+
+    for g in usage.get("gpus", []):
+        table.add_row(
+            f"GPU {g['index']} ({g['name']})",
+            f"{g['used_gb']} GB / {g['total_gb']} GB",
+            f"{g['percent_used']}% used ({g['free_gb']} GB free)",
+        )
+
+    console.print(table)
+
+
+# -----------------------------------------------------------------------------
+# Export Group
+# -----------------------------------------------------------------------------
+
+@cli.group("export")
+def export_group():
+    """Export reactive notebooks to HTML, Markdown, IPYNB, Script, or PDF via remote Marimo backend."""
+    pass
+
+
+@export_group.command("html")
+@click.argument("notebook_id")
+@click.option("-o", "--output", help="Output file path (default: <notebook_id>.html)")
+@click.option("--no-code", is_flag=True, help="Exclude source code cells from export")
+def cmd_export_html(notebook_id: str, output: Optional[str], no_code: bool):
+    """Export notebook to a standalone self-contained HTML document."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    out_file = output or f"{notebook_id}.html"
+    with console.status(f"[bold cyan]Exporting notebook {notebook_id} to HTML...[/bold cyan]"):
+        try:
+            html = backend.export_notebook("html", include_code=not no_code)
+            Path(out_file).write_text(html, encoding="utf-8")
+            console.print(f"[bold green]✔ Exported HTML to {out_file}[/bold green] ({len(html)} bytes)")
+        except Exception as e:
+            console.print(f"[red]Export failed:[/red] {e}")
+
+
+@export_group.command("md")
+@click.argument("notebook_id")
+@click.option("-o", "--output", help="Output file path (default: <notebook_id>.md)")
+def cmd_export_md(notebook_id: str, output: Optional[str]):
+    """Export notebook to Markdown format."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    out_file = output or f"{notebook_id}.md"
+    with console.status(f"[bold cyan]Exporting notebook {notebook_id} to Markdown...[/bold cyan]"):
+        try:
+            md = backend.export_notebook("markdown")
+            Path(out_file).write_text(md, encoding="utf-8")
+            console.print(f"[bold green]✔ Exported Markdown to {out_file}[/bold green] ({len(md)} bytes)")
+        except Exception as e:
+            console.print(f"[red]Export failed:[/red] {e}")
+
+
+@export_group.command("ipynb")
+@click.argument("notebook_id")
+@click.option("-o", "--output", help="Output file path (default: <notebook_id>.ipynb)")
+def cmd_export_ipynb(notebook_id: str, output: Optional[str]):
+    """Export notebook to standard Jupyter Notebook (.ipynb) format."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    out_file = output or f"{notebook_id}.ipynb"
+    with console.status(f"[bold cyan]Exporting notebook {notebook_id} to IPYNB...[/bold cyan]"):
+        try:
+            nb = backend.export_notebook("ipynb")
+            Path(out_file).write_text(nb, encoding="utf-8")
+            console.print(f"[bold green]✔ Exported Jupyter notebook to {out_file}[/bold green] ({len(nb)} bytes)")
+        except Exception as e:
+            console.print(f"[red]Export failed:[/red] {e}")
+
+
+@export_group.command("script")
+@click.argument("notebook_id")
+@click.option("-o", "--output", help="Output file path (default: <notebook_id>.py)")
+def cmd_export_script(notebook_id: str, output: Optional[str]):
+    """Export notebook to a clean standalone Python script."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    out_file = output or f"{notebook_id}.py"
+    with console.status(f"[bold cyan]Exporting notebook {notebook_id} to Script...[/bold cyan]"):
+        try:
+            sc = backend.export_notebook("script")
+            Path(out_file).write_text(sc, encoding="utf-8")
+            console.print(f"[bold green]✔ Exported Script to {out_file}[/bold green] ({len(sc)} bytes)")
+        except Exception as e:
+            console.print(f"[red]Export failed:[/red] {e}")
+
+
+@export_group.command("pdf")
+@click.argument("notebook_id")
+@click.option("-o", "--output", help="Output file path (default: <notebook_id>.pdf)")
+def cmd_export_pdf(notebook_id: str, output: Optional[str]):
+    """Export notebook to PDF format."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    out_file = output or f"{notebook_id}.pdf"
+    with console.status(f"[bold cyan]Exporting notebook {notebook_id} to PDF...[/bold cyan]"):
+        try:
+            data = backend.export_notebook("pdf")
+            if isinstance(data, str):
+                Path(out_file).write_text(data, encoding="utf-8")
+            else:
+                Path(out_file).write_bytes(data)
+            console.print(f"[bold green]✔ Exported PDF to {out_file}[/bold green] ({len(data)} bytes)")
+        except Exception as e:
+            console.print(f"[red]Export failed:[/red] {e}")
+
+
+# -----------------------------------------------------------------------------
+# File Group
+# -----------------------------------------------------------------------------
+
+@cli.group("file")
+def file_group():
+    """Manage remote files directly via high-speed native Marimo REST endpoints."""
+    pass
+
+
+@file_group.command("ls")
+@click.argument("notebook_id")
+@click.argument("path", default=".")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output file list as JSON")
+def cmd_file_ls(notebook_id: str, path: str, as_json: bool):
+    """List files and folders on pod via native REST endpoint."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    try:
+        files = backend.list_files(path=path)
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[red]Error listing files:[/red] {e}")
+        return
+
+    if as_json:
+        print(json.dumps(files, indent=2))
+        return
+
+    table = Table(title=f"Remote Files: {path} ({notebook_id})", box=box.ROUNDED)
+    table.add_column("Type", justify="center")
+    table.add_column("Name", style="bold cyan")
+    table.add_column("Size", justify="right")
+    table.add_column("Path", style="dim")
+
+    for f in files:
+        is_dir = f.get("isDirectory", False)
+        t_str = "[blue]DIR[/blue]" if is_dir else "[white]FILE[/white]"
+        sz = "-" if is_dir or f.get("size") is None else f"{f.get('size')} B"
+        table.add_row(t_str, f.get("name", ""), sz, f.get("path", ""))
+
+    console.print(table)
+
+
+@file_group.command("cat")
+@click.argument("notebook_id")
+@click.argument("path")
+def cmd_file_cat(notebook_id: str, path: str):
+    """View contents of a remote text file via native REST endpoint."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    with console.status(f"[bold cyan]Reading {path}...[/bold cyan]"):
+        try:
+            content = backend.read_file(path)
+            console.print(content, markup=False)
+        except Exception as e:
+            console.print(f"[red]Error reading file:[/red] {e}")
+
+
+@file_group.command("info")
+@click.argument("notebook_id")
+@click.argument("path")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output details as JSON")
+def cmd_file_info(notebook_id: str, path: str, as_json: bool):
+    """Fetch metadata and mime type of a file on the remote pod."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    try:
+        details = backend.file_details(path)
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[red]Error fetching details:[/red] {e}")
+        return
+
+    if as_json:
+        print(json.dumps(details, indent=2))
+        return
+
+    f_meta = details.get("file", {})
+    console.print(Panel(
+        f"[bold]Path:[/bold]      {f_meta.get('path')}\n"
+        f"[bold]Name:[/bold]      {f_meta.get('name')}\n"
+        f"[bold]Directory:[/bold] {f_meta.get('isDirectory')}\n"
+        f"[bold]Size:[/bold]      {f_meta.get('size')} bytes\n"
+        f"[bold]MIME Type:[/bold] {details.get('mimeType')}\n"
+        f"[bold]Base64:[/bold]    {details.get('isBase64')}\n"
+        f"[bold]Oversize:[/bold]  {details.get('isTooLarge')}",
+        title=f"File Info: {path}",
+        box=box.ROUNDED,
+    ))
+
+
+@file_group.command("cp")
+@click.argument("notebook_id")
+@click.argument("src")
+@click.argument("dst")
+def cmd_file_cp(notebook_id: str, src: str, dst: str):
+    """Instant server-side copy without local data transfer."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    with console.status(f"[bold cyan]Copying {src} -> {dst}...[/bold cyan]"):
+        try:
+            ok = backend.copy_file(src, dst)
+            if ok:
+                console.print(f"[bold green]✔ Copied {src} -> {dst}[/bold green]")
+            else:
+                console.print(f"[red]✘ Copy failed for {src}[/red]")
+        except Exception as e:
+            console.print(f"[red]Copy error:[/red] {e}")
+
+
+@file_group.command("mv")
+@click.argument("notebook_id")
+@click.argument("src")
+@click.argument("dst")
+def cmd_file_mv(notebook_id: str, src: str, dst: str):
+    """Instant server-side move / rename."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    with console.status(f"[bold cyan]Moving {src} -> {dst}...[/bold cyan]"):
+        try:
+            ok = backend.move_file(src, dst)
+            if ok:
+                console.print(f"[bold green]✔ Moved {src} -> {dst}[/bold green]")
+            else:
+                console.print(f"[red]✘ Move failed for {src}[/red]")
+        except Exception as e:
+            console.print(f"[red]Move error:[/red] {e}")
+
+
+@file_group.command("rm")
+@click.argument("notebook_id")
+@click.argument("path")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
+def cmd_file_rm(notebook_id: str, path: str, yes: bool):
+    """Delete a remote file or folder on the pod."""
+    if not yes:
+        if not click.confirm(f"Are you sure you want to delete {path} on {notebook_id}?"):
+            console.print("[dim]Aborted.[/dim]")
+            return
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    with console.status(f"[bold red]Deleting {path}...[/bold red]"):
+        try:
+            ok = backend.delete_file(path)
+            if ok:
+                console.print(f"[bold green]✔ Deleted {path}[/bold green]")
+            else:
+                console.print(f"[red]✘ Delete failed for {path}[/red]")
+        except Exception as e:
+            console.print(f"[red]Delete error:[/red] {e}")
+
+
+@file_group.command("search")
+@click.argument("notebook_id")
+@click.argument("query")
+@click.option("--path", default=None, help="Search root directory")
+@click.option("--depth", default=5, help="Search depth (default 5)")
+@click.option("--limit", default=100, help="Max results (default 100)")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output results as JSON")
+def cmd_file_search(notebook_id: str, query: str, path: Optional[str], depth: int, limit: int, as_json: bool):
+    """Fast server-side recursive file and directory search."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    try:
+        results = backend.search_files(query=query, path=path, depth=depth, limit=limit)
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[red]Search error:[/red] {e}")
+        return
+
+    if as_json:
+        print(json.dumps(results, indent=2))
+        return
+
+    if not results:
+        console.print(f"[yellow]No files matching '{query}' found.[/yellow]")
+        return
+
+    table = Table(title=f"Search Results for '{query}' ({len(results)} found)", box=box.ROUNDED)
+    table.add_column("Type", justify="center")
+    table.add_column("Name", style="bold cyan")
+    table.add_column("Path", style="white")
+
+    for r in results:
+        t_str = "[blue]DIR[/blue]" if r.get("isDirectory") else "[white]FILE[/white]"
+        table.add_row(t_str, r.get("name", ""), r.get("path", ""))
+
+    console.print(table)
+
+
+# -----------------------------------------------------------------------------
+# Kernel Group
+# -----------------------------------------------------------------------------
+
+@cli.group("kernel")
+def kernel_group():
+    """Manage and interact directly with the remote Marimo Python kernel."""
+    pass
+
+
+@kernel_group.command("status")
+@click.argument("notebook_id")
+@click.option("--file", "file_key", default="notebook.py", help="Notebook context filename")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output status as JSON")
+def cmd_kernel_status(notebook_id: str, file_key: str, as_json: bool):
+    """Check if the remote Python kernel is idle or running."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    try:
+        status = backend.get_kernel_status(file_key=file_key)
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[red]Error querying kernel status:[/red] {e}")
+        return
+
+    if as_json:
+        print(json.dumps(status, indent=2))
+        return
+
+    state = status.get("state", "unknown")
+    st_color = "green" if state == "idle" else ("yellow" if state == "running" else "red")
+    console.print(f"Kernel Status: [bold {st_color}]{state.upper()}[/bold {st_color}]")
+
+
+@kernel_group.command("eval")
+@click.argument("notebook_id")
+@click.argument("code")
+@click.option("--file", "file_key", default="notebook.py", help="Notebook context filename")
+@click.option("--timeout", default=30.0, help="Execution timeout in seconds")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output evaluation result as JSON")
+def cmd_kernel_eval(notebook_id: str, code: str, file_key: str, timeout: float, as_json: bool):
+    """Execute Python code directly inside the remote Marimo Python kernel."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    if not as_json:
+        with console.status("[bold cyan]Evaluating in remote Marimo kernel...[/bold cyan]"):
+            try:
+                res = backend.eval_python(code=code, file_key=file_key, timeout=timeout)
+            except Exception as e:
+                console.print(f"[red]Kernel execution failed:[/red] {e}")
+                return
+    else:
+        try:
+            res = backend.eval_python(code=code, file_key=file_key, timeout=timeout)
+        except Exception as e:
+            print(json.dumps({"error": str(e)}))
+            return
+        print(json.dumps(res, indent=2))
+        return
+
+    if res.get("stdout"):
+        console.print(res["stdout"], markup=False, end="")
+    if res.get("stderr"):
+        console.print(f"[red]{res['stderr']}[/red]", markup=False, end="")
+    if res.get("output_text"):
+        console.print(f"[bold green]=> {res['output_text']}[/bold green]")
+
+
+@kernel_group.command("restart")
+@click.argument("notebook_id")
+@click.option("--file", "file_key", default="notebook.py", help="Notebook context filename")
+def cmd_kernel_restart(notebook_id: str, file_key: str):
+    """Soft-restart remote Marimo kernel without restarting container."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    with console.status("[bold yellow]Restarting Marimo Python kernel...[/bold yellow]"):
+        try:
+            ok = backend.restart_kernel(file_key=file_key)
+            if ok:
+                console.print("[bold green]✔ Kernel restarted successfully.[/bold green]")
+            else:
+                console.print("[red]✘ Failed to restart kernel.[/red]")
+        except Exception as e:
+            console.print(f"[red]Restart error:[/red] {e}")
+
+
+@kernel_group.command("interrupt")
+@click.argument("notebook_id")
+@click.option("--file", "file_key", default="notebook.py", help="Notebook context filename")
+def cmd_kernel_interrupt(notebook_id: str, file_key: str):
+    """Interrupt running cell execution in the remote Marimo kernel."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    with console.status("[bold yellow]Interrupting Marimo Python kernel...[/bold yellow]"):
+        try:
+            ok = backend.interrupt_kernel(file_key=file_key)
+            if ok:
+                console.print("[bold green]✔ Kernel interrupted.[/bold green]")
+            else:
+                console.print("[red]✘ Failed to interrupt kernel.[/red]")
+        except Exception as e:
+            console.print(f"[red]Interrupt error:[/red] {e}")
+
+
+# -----------------------------------------------------------------------------
+# Package Group
+# -----------------------------------------------------------------------------
+
+@cli.group("pkg")
+def pkg_group():
+    """Inspect and manage Python packages on the remote pod via native Marimo package manager."""
+    pass
+
+
+@pkg_group.command("list")
+@click.argument("notebook_id")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output package list as JSON")
+def cmd_pkg_list(notebook_id: str, as_json: bool):
+    """List packages managed by remote pod environment."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    try:
+        pkgs = backend.list_packages()
+    except Exception as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            console.print(f"[red]Error listing packages:[/red] {e}")
+        return
+
+    if as_json:
+        print(json.dumps(pkgs, indent=2))
+        return
+
+    if not pkgs:
+        console.print("[yellow]No custom packages listed.[/yellow]")
+        return
+
+    table = Table(title=f"Installed Packages ({notebook_id})", box=box.ROUNDED)
+    table.add_column("Package", style="bold cyan")
+    table.add_column("Version", style="green")
+
+    for p in pkgs:
+        table.add_row(p.get("name", ""), p.get("version", ""))
+
+    console.print(table)
+
+
+@pkg_group.command("add")
+@click.argument("notebook_id")
+@click.argument("package_name")
+@click.option("--upgrade", is_flag=True, help="Upgrade package if already installed")
+def cmd_pkg_add(notebook_id: str, package_name: str, upgrade: bool):
+    """Install a Python package natively on the remote pod."""
+    from molab_cli.backend import MarimoBackendClient
+    session = SandboxSession(notebook_id)
+    backend = MarimoBackendClient(session)
+    with console.status(f"[bold cyan]Installing {package_name} on pod...[/bold cyan]"):
+        try:
+            res = backend.add_package(package_name=package_name, upgrade=upgrade)
+            console.print(f"[bold green]✔ Successfully installed {package_name}![/bold green]")
+        except Exception as e:
+            console.print(f"[red]Installation error:[/red] {e}")
+
+
 def main():
     cli()
 

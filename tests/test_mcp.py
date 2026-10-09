@@ -60,3 +60,42 @@ def test_mcp_tool_call_doctor():
         assert resp["id"] == 102
         assert resp["result"]["isError"] is False
         assert "HEALTHY" in resp["result"]["content"][0]["text"]
+
+
+def test_mcp_backend_tools():
+    server = MoLabMCPServer()
+    req = {
+        "jsonrpc": "2.0",
+        "id": 103,
+        "method": "tools/list",
+        "params": {}
+    }
+    resp = server.handle_request(req)
+    tools = resp["result"]["tools"]
+    tool_names = [t["name"] for t in tools]
+
+    assert "molab_usage" in tool_names
+    assert "molab_export_notebook" in tool_names
+    assert "molab_kernel_eval" in tool_names
+    assert "molab_kernel_status" in tool_names
+    assert "molab_file_list" in tool_names
+    assert "molab_file_details" in tool_names
+    assert "molab_file_search" in tool_names
+    assert "molab_pkg_list" in tool_names
+    assert len(tools) >= 29
+
+    with patch("molab_cli.backend.MarimoBackendClient.get_usage", return_value={"total_gb": 160.0}), \
+         patch("molab_cli.sandbox.SandboxSession.resolve"):
+        call_req = {
+            "jsonrpc": "2.0",
+            "id": 104,
+            "method": "tools/call",
+            "params": {
+                "name": "molab_usage",
+                "arguments": {"notebook_id": "nb_test_123"}
+            }
+        }
+        call_resp = server.handle_request(call_req)
+        assert call_resp["id"] == 104
+        assert call_resp["result"]["isError"] is False
+        assert "160.0" in call_resp["result"]["content"][0]["text"]
