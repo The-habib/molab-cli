@@ -553,7 +553,7 @@ def action_jobs_and_batches(client: MoLabClient) -> None:
             if nb:
                 cmd = questionary.text("Enter command to run in background:", style=QUESTIONARY_STYLE).ask()
                 if cmd:
-                    job = jm.submit_job(cmd, notebook_id=nb["id"], name="manual-tui-job")
+                    job = jm.submit_job(notebook_id=nb["id"], command=cmd, name="manual-tui-job")
                     render_success_card("Job Submitted!", f"Job ID: {job['id']}\nTracking in SQLite.")
 
 
@@ -587,7 +587,7 @@ def action_workloads(client: MoLabClient) -> None:
         try:
             cmd = selected.command_builder(params) if selected.command_builder else "echo 'No command'"
             jm = JobManager()
-            job = jm.submit_job(cmd, notebook_id=nb["id"], name=selected.name)
+            job = jm.submit_job(notebook_id=nb["id"], command=cmd, name=selected.name)
             render_success_card("Workload Running!", f"Launched {selected.name} on {nb['id']}.\nJob ID: {job['id']}")
         except Exception as e:
             render_error_card("Workload Launch Failed", str(e))

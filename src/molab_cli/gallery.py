@@ -74,13 +74,17 @@ class GalleryManager:
         title_match = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE)
         raw_title = title_match.group(1).split("-")[0].strip() if title_match else clean_slug.replace("-", " ").title()
 
-        # Extract github link
-        gh_match = re.search(r'href="(https://github\.com/marimo-team/gallery-examples/blob/[^"]+\.py)"', html)
+        # Extract github link (supports marimo-team and independent author repos)
+        gh_match = re.search(r'href="(https://github\.com/[^"/]+/[^"/]+/blob/[^"]+\.py)"', html)
         github_url = gh_match.group(1) if gh_match else None
 
         raw_url = None
         if github_url:
             raw_url = github_url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+        else:
+            raw_match = re.search(r'href="(https://raw\.githubusercontent\.com/[^"]+\.py)"', html)
+            if raw_match:
+                raw_url = raw_match.group(1)
 
         # Extract description meta
         desc_match = re.search(r'<meta name="description" content="([^"]+)"', html)

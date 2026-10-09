@@ -521,10 +521,11 @@ def api_pods():
         except Exception:
             pass
 
+        sandbox_id = sb_info if isinstance(sb_info, str) else sb_info.get("sandbox_id", "")
         result.append({
             "id": nb_id,
             "title": nb_meta.get("title", "Untitled Pod"),
-            "sandbox_id": sb_info.get("sandbox_id"),
+            "sandbox_id": sandbox_id,
             "gpu": nb_meta.get("gpu", "rtxp6000"),
             "is_free": is_free,
             "vram_used_gb": vram_used,

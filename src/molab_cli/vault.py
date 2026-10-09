@@ -10,7 +10,7 @@ import os
 import shlex
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from molab_cli.exceptions import MoLabError
 from molab_cli.sandbox import SandboxSession
@@ -26,9 +26,13 @@ class VaultError(MoLabError):
 class MoLabVault:
     """Manages 100% on-MoLab workspace persistence stored inside notebook metadata."""
 
-    def __init__(self, notebook_id: str):
-        self.notebook_id = notebook_id if notebook_id.startswith("nb_") else f"nb_{notebook_id}"
-        self.session = SandboxSession(self.notebook_id)
+    def __init__(self, target: Union[str, SandboxSession]):
+        if isinstance(target, SandboxSession):
+            self.session = target
+            self.notebook_id = target.notebook_id
+        else:
+            self.notebook_id = target if target.startswith("nb_") else f"nb_{target}"
+            self.session = SandboxSession(self.notebook_id)
 
     def pack_workspace(
         self,
@@ -274,10 +278,11 @@ else:
                 size_b64 = int(line_s.split(":")[1])
                 return {
                     "has_vault": True,
+                    "exists": True,
                     "approx_size_bytes": int(size_b64 * 3 / 4),
                     "storage_location": "MoLab Cloud Database (100% on MoLab)",
                 }
             elif line_s == "NONE":
-                return {"has_vault": False}
+                return {"has_vault": False, "exists": False}
 
-        return {"has_vault": False}
+        return {"has_vault": False, "exists": False}

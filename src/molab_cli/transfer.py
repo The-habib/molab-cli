@@ -61,8 +61,13 @@ class TransferManager:
             dest_file = remote_path or f"/workspace/{filename}"
             dest_dir = os.path.dirname(dest_file) or "/workspace"
 
-        # Ensure destination directory exists on pod
-        self.session.execute_command(f"mkdir -p {shlex.quote(dest_dir)}")
+        # Remove any existing destination file via native HTTP REST to avoid _1 duplicates
+        try:
+            from molab_cli.backend import MarimoBackendClient
+            backend = MarimoBackendClient(self.session)
+            backend.delete_file(dest_file)
+        except Exception:
+            pass
 
         start_time = time.time()
         local_hash = calculate_local_sha256(abs_local) if verify_checksum else None
