@@ -771,6 +771,302 @@ def cmd_chat(notebook_id: str, max_tokens: int, temp: float):
         ))
 
 
+@cli.command("doctor")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output health checks as JSON")
+def cmd_doctor(as_json: bool):
+    """Run diagnostic health checks on authentication, network, tools, and pods."""
+    from molab_cli.capabilities import run_doctor
+    doc = run_doctor()
+    if as_json:
+        print(json.dumps(doc, indent=2))
+        return
+    table = Table(title="[bold cyan]MoLab System Doctor[/bold cyan]", box=box.ROUNDED)
+    table.add_column("Check", style="cyan")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Message", style="white")
+    for chk in doc.get("checks", []):
+        st = chk.get("status")
+        st_styled = "[bold green]PASS[/bold green]" if st == "PASS" else ("[bold yellow]WARN[/bold yellow]" if st == "WARN" else "[bold red]FAIL[/bold red]")
+        table.add_row(chk.get("name"), st_styled, chk.get("message"))
+    console.print(table)
+    overall = doc.get("status")
+    color = "green" if overall == "HEALTHY" else ("yellow" if overall == "WARNING" else "red")
+    console.print(f"Overall Status: [bold {color}]{overall}[/bold {color}] ({doc.get('passed')}/{doc.get('total_checks')} passed)")
+
+
+@cli.command("capabilities")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output capabilities as JSON")
+def cmd_capabilities(as_json: bool):
+    """Discover confirmed facts regarding local and remote compute capabilities."""
+    from molab_cli.capabilities import discover_capabilities
+    caps = discover_capabilities()
+    if as_json:
+        print(json.dumps(caps, indent=2))
+        return
+    console.print(Panel(
+        f"[bold white]Platform:[/bold white] {caps['local']['platform']}\n"
+        f"[bold white]Python:[/bold white] {caps['local']['python_version']}\n"
+        f"[bold white]Active Pods:[/bold white] {caps['remote']['running_pods']} (GPU: {caps['remote']['gpu_pods']})\n"
+        f"[bold white]Transfer Engine:[/bold white] Native HTTP/2 Streaming (SHA-256 Verified)\n"
+        f"[bold white]Job Engine:[/bold white] Local SQLite + Detached Pod Watcher",
+        title="MoLab Platform Capabilities",
+        border_style="cyan",
+    ))
+
+
+@cli.command("sync")
+@click.argument("notebook_id")
+@click.argument("local_dir")
+@click.argument("remote_dir")
+@click.option("--dry-run", is_flag=True, help="Compute diff without uploading files")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output sync summary as JSON")
+def cmd_sync(notebook_id: str, local_dir: str, remote_dir: str, dry_run: bool, as_json: bool):
+    """Delta synchronize local directory to pod using SHA-256 manifests."""
+    from molab_cli.transfer import TransferManager
+    session = SandboxSession(notebook_id)
+    transfer = TransferManager(session)
+    res = transfer.sync_dir(local_dir, remote_dir, dry_run=dry_run)
+    if as_json:
+        print(json.dumps(res, indent=2))
+        return
+    console.print(f"[bold green]Sync {'simulation' if dry_run else 'completed'} successfully![/bold green]")
+    console.print(f"• Uploaded: [bold]{res['to_upload_count']}[/bold] files ({round(res['uploaded_bytes'] / (1024**2), 2)} MB)")
+    console.print(f"• Unchanged: [dim]{res['unchanged_count']}[/dim] files")
+
+
+@cli.group("job")
+def job_group():
+    """Manage asynchronous background jobs and output artifacts."""
+    pass
+
+
+@job_group.command("submit")
+@click.argument("notebook_id")
+@click.argument("command")
+@click.option("--name", default=None, help="Descriptive job name")
+@click.option("--workdir", default="/workspace", help="Remote working directory")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output job record as JSON")
+def cmd_job_submit(notebook_id: str, command: str, name: Optional[str], workdir: str, as_json: bool):
+    """Submit a detached background job to pod with persistent SQLite tracking."""
+    from molab_cli.jobs import JobManager
+    jm = JobManager()
+    job = jm.submit_job(notebook_id=notebook_id, command=command, name=name, workdir=workdir)
+    if as_json:
+        print(json.dumps(job, indent=2))
+        return
+    console.print(Panel(
+        f"[bold green]Job Submitted Successfully![/bold green]\n"
+        f"• Job ID:      [bold cyan]{job['id']}[/bold cyan]\n"
+        f"• Name:        {job['name']}\n"
+        f"• Remote PID:  [dim]{job['remote_pid']}[/dim]\n"
+        f"• Log File:    [dim]{job['remote_log_path']}[/dim]\n\n"
+        f"Inspect status: [bold]molab job status {job['id']}[/bold]\n"
+        f"Stream logs:    [bold]molab job logs {job['id']}[/bold]",
+        title="Background Job",
+        border_style="green",
+    ))
+
+
+@job_group.command("list")
+@click.option("--limit", default=25, help="Max jobs to display")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output jobs as JSON")
+def cmd_job_list(limit: int, as_json: bool):
+    """List historic and active background jobs."""
+    import time
+    from molab_cli.jobs import JobManager
+    jm = JobManager()
+    jobs = jm.list_jobs(limit=limit)
+    if as_json:
+        print(json.dumps(jobs, indent=2))
+        return
+    table = Table(title="[bold cyan]MoLab Background Jobs[/bold cyan]", box=box.ROUNDED)
+    table.add_column("Job ID", style="cyan")
+    table.add_column("Name", style="white")
+    table.add_column("Pod", style="dim")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Exit Code", justify="center")
+    table.add_column("Created", style="dim")
+    for j in jobs:
+        st = j["status"]
+        st_color = "green" if st == "COMPLETED" else ("cyan" if st == "RUNNING" else ("red" if st in ("FAILED", "LOST") else "yellow"))
+        table.add_row(
+            j["id"],
+            j["name"],
+            j["notebook_id"][:12] + "...",
+            f"[bold {st_color}]{st}[/bold {st_color}]",
+            str(j["exit_code"]) if j["exit_code"] is not None else "-",
+            time.strftime("%m-%d %H:%M", time.localtime(j["created_at"])) if j.get("created_at") else "-",
+        )
+    console.print(table)
+
+
+@job_group.command("status")
+@click.argument("job_id")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output status as JSON")
+def cmd_job_status(job_id: str, as_json: bool):
+    """Query refreshed status of a background job."""
+    from molab_cli.jobs import JobManager
+    jm = JobManager()
+    job = jm.refresh_job_status(job_id)
+    if as_json:
+        print(json.dumps(job, indent=2))
+        return
+    console.print(Panel(
+        f"• Status:     [bold]{job['status']}[/bold]\n"
+        f"• Exit Code:  {job['exit_code']}\n"
+        f"• Remote PID: {job['remote_pid']}\n"
+        f"• Error:      {job.get('error_message') or 'None'}\n"
+        f"• Logs:       {job['remote_log_path']}",
+        title=f"Job {job_id} ({job['name']})",
+        border_style="cyan",
+    ))
+
+
+@job_group.command("logs")
+@click.argument("job_id")
+@click.option("--tail", default=100, help="Number of lines to tail")
+def cmd_job_logs(job_id: str, tail: int):
+    """Fetch execution logs for a background job."""
+    from molab_cli.jobs import JobManager
+    jm = JobManager()
+    logs = jm.get_job_logs(job_id, tail_lines=tail)
+    console.print(logs)
+
+
+@job_group.command("cancel")
+@click.argument("job_id")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output cancellation as JSON")
+def cmd_job_cancel(job_id: str, as_json: bool):
+    """Cancel a running background job."""
+    from molab_cli.jobs import JobManager
+    jm = JobManager()
+    res = jm.cancel_job(job_id)
+    if as_json:
+        print(json.dumps(res, indent=2))
+        return
+    console.print(f"[bold yellow]Job {job_id} cancelled.[/bold yellow]")
+
+
+@job_group.command("artifacts")
+@click.argument("job_id")
+@click.option("--download", "download_dir", default=None, help="Local directory to download artifacts to")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output artifacts list as JSON")
+def cmd_job_artifacts(job_id: str, download_dir: Optional[str], as_json: bool):
+    """List or download output artifacts produced by a job."""
+    from molab_cli.jobs import JobManager
+    jm = JobManager()
+    if download_dir:
+        res = jm.download_artifacts(job_id, download_dir)
+        if as_json:
+            print(json.dumps(res, indent=2))
+            return
+        console.print(f"[bold green]Downloaded {len(res)} artifacts to {download_dir}[/bold green]")
+    else:
+        artifacts = jm.list_artifacts(job_id)
+        if as_json:
+            print(json.dumps(artifacts, indent=2))
+            return
+        table = Table(title=f"Artifacts for {job_id}", box=box.ROUNDED)
+        table.add_column("Remote Path", style="cyan")
+        table.add_column("Size", justify="right")
+        table.add_column("SHA-256", style="dim")
+        for a in artifacts:
+            table.add_row(a["remote_path"], f"{round(a['size_bytes'] / (1024**2), 2)} MB", a.get("sha256", "N/A")[:12] + "...")
+        console.print(table)
+
+
+@cli.group("workload")
+def workload_group():
+    """Manage and launch reusable workload templates."""
+    pass
+
+
+@workload_group.command("list")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output workloads as JSON")
+def cmd_workload_list(as_json: bool):
+    """List available pluggable workload templates."""
+    from molab_cli.workloads import WorkloadRegistry
+    reg = WorkloadRegistry()
+    workloads = reg.list_workloads()
+    if as_json:
+        print(json.dumps([w.to_dict() for w in workloads], indent=2))
+        return
+    table = Table(title="[bold cyan]MoLab Pluggable Workloads[/bold cyan]", box=box.ROUNDED)
+    table.add_column("Template", style="bold cyan")
+    table.add_column("Category", style="green")
+    table.add_column("Min VRAM", justify="right")
+    table.add_column("Description", style="white")
+    for w in workloads:
+        table.add_row(w.name, w.category, f"{w.min_vram_gb} GB" if w.min_vram_gb else "-", w.description)
+    console.print(table)
+
+
+@cli.group("serve")
+def serve_group():
+    """Manage OpenAI-compatible model servers and application endpoints."""
+    pass
+
+
+@serve_group.command("status")
+@click.argument("notebook_id")
+@click.option("--port", default=8000, help="Port to inspect (default: 8000)")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output status as JSON")
+def cmd_serve_status(notebook_id: str, port: int, as_json: bool):
+    """Verify application-level health and port binding for model server."""
+    from molab_cli.services import ServiceManager
+    session = SandboxSession(notebook_id)
+    sm = ServiceManager(session)
+    res = sm.get_service_status(port=port)
+    if as_json:
+        print(json.dumps(res, indent=2))
+        return
+    st = res["status"]
+    st_color = "green" if st == "HEALTHY" else ("yellow" if st == "UNHEALTHY" else "dim")
+    console.print(Panel(
+        f"• Status:        [bold {st_color}]{st}[/bold {st_color}]\n"
+        f"• Port:          {res['port']}\n"
+        f"• Listener:      {res['has_listener']}\n"
+        f"• Response Time: {res.get('response_time_ms', 'N/A')} ms",
+        title=f"Service on {notebook_id}:{port}",
+        border_style="cyan",
+    ))
+
+
+@serve_group.command("stop")
+@click.argument("notebook_id")
+@click.option("--port", default=8000, help="Port to stop (default: 8000)")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output result as JSON")
+def cmd_serve_stop(notebook_id: str, port: int, as_json: bool):
+    """Gracefully terminate model service running on pod."""
+    from molab_cli.services import ServiceManager
+    session = SandboxSession(notebook_id)
+    sm = ServiceManager(session)
+    ok = sm.stop_service(port=port)
+    if as_json:
+        print(json.dumps({"success": ok, "port": port}, indent=2))
+        return
+    console.print(f"[bold green]Service on port {port} stopped.[/bold green]")
+
+
+@serve_group.command("logs")
+@click.argument("notebook_id")
+@click.option("--tail", default=50, help="Number of lines to read")
+def cmd_serve_logs(notebook_id: str, tail: int):
+    """Read recent service logs from pod."""
+    from molab_cli.services import ServiceManager
+    session = SandboxSession(notebook_id)
+    sm = ServiceManager(session)
+    logs = sm.get_service_logs(tail_lines=tail)
+    console.print(logs)
+
+
+@cli.command("mcp")
+def cmd_mcp():
+    """Start the Model Context Protocol (MCP) JSON-RPC 2.0 stdio server."""
+    from molab_cli.mcp import run_mcp_server
+    run_mcp_server()
+
+
 def main():
     cli()
 

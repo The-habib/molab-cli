@@ -173,3 +173,155 @@ Bridge the pod's model server (port 8000) to localhost (`http://127.0.0.1:8000/v
   ```bash
   molab forward nb_xxx --port 8000
   ```
+
+---
+
+## 5. System Diagnostics & Capabilities
+
+### `molab doctor`
+Run comprehensive diagnostic health checks across auth, network, tools, local storage, and active Blackwell GPU pods.
+* **Flags:**
+  * `-j, --json`: Machine-readable diagnostic health report.
+* **Example:**
+  ```bash
+  molab doctor
+  molab doctor --json
+  ```
+
+### `molab capabilities`
+Discover confirmed facts and environment constraints across local host, remote compute, transfer protocols, and execution runtimes.
+* **Flags:**
+  * `-j, --json`: Machine-readable inventory of capabilities.
+* **Example:**
+  ```bash
+  molab capabilities
+  molab capabilities --json
+  ```
+
+---
+
+## 6. Directory Delta Sync
+
+### `molab sync <notebook_id> <local_dir> <remote_dir>`
+Delta synchronize a local directory to a pod by comparing local and remote SHA-256 manifests. Only files that are missing or have modified checksums are uploaded.
+* **Options:**
+  * `--dry-run`: Compute and report the sync manifest diff without transferring files.
+  * `-j, --json`: Machine-readable sync summary.
+* **Examples:**
+  ```bash
+  molab sync nb_xxx ./src /workspace/src
+  molab sync nb_xxx ./datasets /workspace/datasets --dry-run --json
+  ```
+
+---
+
+## 7. Universal Job & Artifact Subsystem
+
+### `molab job submit <notebook_id> "<command>"`
+Submit a detached background job with persistent SQLite tracking, auto-log recording, and artifact collection.
+* **Options:**
+  * `--name <string>`: Descriptive job name.
+  * `--workdir <path>`: Working directory on pod (Default: `/workspace`).
+  * `-j, --json`: Output job record as JSON.
+* **Example:**
+  ```bash
+  molab job submit nb_xxx "python3 train.py --epochs 10" --name "lora-run-1"
+  ```
+
+### `molab job list`
+List historic and active background jobs.
+* **Options:**
+  * `--limit <number>`: Max jobs to list (Default: 25).
+  * `-j, --json`: Output jobs as JSON.
+* **Example:**
+  ```bash
+  molab job list
+  molab job list --json
+  ```
+
+### `molab job status <job_id>`
+Query refreshed status of a background job. Synchronizes controller state with remote process state and captures exit codes upon completion.
+* **Example:**
+  ```bash
+  molab job status job_abc12345
+  molab job status job_abc12345 --json
+  ```
+
+### `molab job logs <job_id>`
+Read trailing execution logs for a background job.
+* **Options:**
+  * `--tail <lines>`: Number of lines to tail (Default: 100).
+* **Example:**
+  ```bash
+  molab job logs job_abc12345 --tail 50
+  ```
+
+### `molab job cancel <job_id>`
+Gracefully terminate a running background job on the remote pod.
+* **Example:**
+  ```bash
+  molab job cancel job_abc12345
+  ```
+
+### `molab job artifacts <job_id>`
+List or download output artifacts produced by a completed job.
+* **Options:**
+  * `--download <dir>`: Local destination folder to download artifacts to.
+  * `-j, --json`: Output artifacts list as JSON.
+* **Examples:**
+  ```bash
+  molab job artifacts job_abc12345
+  molab job artifacts job_abc12345 --download ./output
+  ```
+
+---
+
+## 8. Pluggable Workload Extensions
+
+### `molab workload list`
+List available pluggable workload templates (e.g., `video-enhance-4k`, `whisper-transcribe`, `vllm-serve`).
+* **Example:**
+  ```bash
+  molab workload list
+  molab workload list --json
+  ```
+
+---
+
+## 9. Model Serving & Lifecycle
+
+### `molab serve status <notebook_id>`
+Verify application-level health and port bindings on an active pod.
+* **Options:**
+  * `--port <number>`: Port to check (Default: 8000).
+  * `-j, --json`: JSON status report.
+* **Example:**
+  ```bash
+  molab serve status nb_xxx
+  ```
+
+### `molab serve stop <notebook_id>`
+Gracefully terminate model service running on the pod.
+* **Example:**
+  ```bash
+  molab serve stop nb_xxx
+  ```
+
+### `molab serve logs <notebook_id>`
+Read recent model service logs from the pod.
+* **Example:**
+  ```bash
+  molab serve logs nb_xxx --tail 50
+  ```
+
+---
+
+## 10. Model Context Protocol (MCP) Server
+
+### `molab mcp`
+Launch the JSON-RPC 2.0 stdio MCP server for seamless integration with AI agents (Claude, Cursor, Antigravity, Open WebUI).
+* **Example:**
+  ```bash
+  molab mcp
+  ```
+

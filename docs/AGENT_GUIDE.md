@@ -54,19 +54,51 @@ for nb_id in running:
 print("Selected Pod:", free_pod_id)
 ```
 
-### High-Speed Video Enhancement Workflow:
+### High-Level Python SDK Orchestration:
 ```python
-# 1. Push input video and script
-session = SandboxSession(free_pod_id)
-session.push_file("/storage/emulated/0/DCIM/Camera/video.mp4", "/workspace/input.mp4")
-session.push_file("pipeline.py", "/workspace/pipeline.py")
+from molab_cli.sdk import MoLabSDK
 
-# 2. Launch execution
-session.execute_command("nohup python3 /workspace/pipeline.py > /workspace/pipeline.log 2>&1 &")
+sdk = MoLabSDK()
 
-# 3. Pull enhanced result
-session.pull_file("/workspace/enhanced.mp4", "/storage/emulated/0/Download/enhanced.mp4")
+# 1. Discover capabilities and health
+doctor_report = sdk.doctor()
+capabilities = sdk.capabilities()
+
+# 2. Acquire free idle 96GB Blackwell pod
+pod = sdk.get_free_pod()
+if not pod:
+    raise RuntimeError("No idle Blackwell GPU pod available")
+
+# 3. Delta synchronize project directory with SHA-256 manifests
+pod.sync("./my_project", "/workspace/my_project")
+
+# 4. Submit background job tracked in local SQLite
+job = pod.submit_job(
+    command="python3 /workspace/my_project/train.py --epochs 10",
+    name="lora-training-run",
+    workdir="/workspace/my_project"
+)
+print("Submitted Job:", job["id"])
+
+# 5. Poll status and download artifacts
+status = sdk.get_job(job["id"])
+if status["status"] == "COMPLETED":
+    sdk.job_manager.download_artifacts(job["id"], "./downloaded_artifacts")
 ```
+
+### Model Context Protocol (MCP) Integration:
+Any MCP-compatible client (Claude Desktop, Cursor, Antigravity) can connect directly to MoLab by running:
+```json
+{
+  "mcpServers": {
+    "molab": {
+      "command": "molab",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+Exposes 15 typed tools for pod discovery, command execution, streaming transfers, and job tracking.
 
 ---
 
@@ -78,3 +110,4 @@ If you need additional flags, custom streaming logic, or specialized diagnostic 
 2. Run `pytest ~/molab-cli/tests/`.
 3. Commit with `git -C ~/molab-cli commit -am "feat: ..."`
 Future agent conversations will automatically inherit your upgrades!
+
