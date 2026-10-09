@@ -2565,6 +2565,229 @@ def cmd_vault_inspect(notebook_id: str, as_json: bool):
             console.print(f"[red]Failed to inspect vault:[/red] {e}")
 
 
+# -----------------------------------------------------------------------------
+# Remote Environment & Diagnostics Commands
+# -----------------------------------------------------------------------------
+
+@cli.command("env")
+@click.argument("notebook_id", required=False)
+@click.option("--as-json", is_flag=True, help="Output JSON format")
+def cmd_remote_env(notebook_id: Optional[str], as_json: bool):
+    """Inspect remote pod environment specifications (OS, gVisor, Python, Node, uv, dependencies)."""
+    from molab_cli.backend import MarimoBackendClient
+    from molab_cli.client import MoLabClient
+    from molab_cli.sandbox import SandboxSession
+
+    target_nb = notebook_id
+    if not target_nb:
+        client = MoLabClient()
+        running = client.list_running_sandboxes()
+        if not running:
+            console.print("[red]No running pods found.[/red]")
+            return
+        target_nb = running[0]["notebook_id"]
+
+    target_nb = target_nb if target_nb.startswith("nb_") else f"nb_{target_nb}"
+    session = SandboxSession(target_nb)
+    backend = MarimoBackendClient(session)
+
+    with console.status("[bold cyan]Querying remote environment metadata...[/bold cyan]"):
+        try:
+            env = backend.get_environment()
+            if as_json:
+                console.print(json.dumps(env, indent=2))
+                return
+
+            from rich.table import Table
+            table = Table(title=f"Remote Environment: {target_nb} ({session.sandbox_id})", border_style="cyan")
+            table.add_column("Property", style="bold white")
+            table.add_column("Value", style="green")
+
+            table.add_row("Operating System", f"{env.get('OS', 'Linux')} ({env.get('OS Version', '')})")
+            table.add_row("Python Runtime", env.get("Python Version", "Unknown"))
+            table.add_row("Node.js Runtime", env.get("Binaries", {}).get("Node", "Unknown"))
+            table.add_row("uv Package Manager", env.get("Binaries", {}).get("uv", "Unknown"))
+            table.add_row("CUDA Index", "https://pypi.nvidia.com (Configured)")
+
+            opt_deps = env.get("Optional Dependencies", {})
+            if opt_deps:
+                deps_summary = ", ".join([f"{k} ({v})" for k, v in list(opt_deps.items())[:10]])
+                table.add_row("Key AI/ML Libraries", deps_summary)
+
+            console.print(table)
+        except Exception as e:
+            console.print(f"[red]Failed to query environment:[/red] {e}")
+
+
+@cli.command("thumbnail")
+@click.argument("notebook_id")
+@click.option("-o", "--output", default="thumbnail.svg", help="Output file path (default: thumbnail.svg)")
+def cmd_thumbnail(notebook_id: str, output: str):
+    """Generate and download visual Open Graph SVG thumbnail of the remote notebook."""
+    from molab_cli.backend import MarimoBackendClient
+    from molab_cli.sandbox import SandboxSession
+
+    target_nb = notebook_id if notebook_id.startswith("nb_") else f"nb_{notebook_id}"
+    session = SandboxSession(target_nb)
+    backend = MarimoBackendClient(session)
+
+    with console.status(f"[bold cyan]Generating visual SVG thumbnail for {target_nb}...[/bold cyan]"):
+        try:
+            backend.get_thumbnail(output_path=output)
+            console.print(f"[bold green]✔ Thumbnail successfully generated and saved to {output}![/bold green]")
+        except Exception as e:
+            console.print(f"[red]Failed to generate thumbnail:[/red] {e}")
+
+
+@cli.command("connections")
+@click.argument("notebook_id")
+@click.option("--as-json", is_flag=True)
+def cmd_connections(notebook_id: str, as_json: bool):
+    """Audit active WebSocket client connections to the remote Marimo server."""
+    from molab_cli.backend import MarimoBackendClient
+    from molab_cli.sandbox import SandboxSession
+
+    target_nb = notebook_id if notebook_id.startswith("nb_") else f"nb_{notebook_id}"
+    session = SandboxSession(target_nb)
+    backend = MarimoBackendClient(session)
+
+    try:
+        conns = backend.get_connections()
+        if as_json:
+            console.print(json.dumps(conns, indent=2))
+        else:
+            console.print(f"Active Client Connections for [bold]{target_nb}[/bold]: [bold cyan]{conns.get('active', 0)}[/bold cyan]")
+    except Exception as e:
+        console.print(f"[red]Failed to query connections:[/red] {e}")
+
+
+# -----------------------------------------------------------------------------
+# MoLab Community Gallery & Templates Group
+# -----------------------------------------------------------------------------
+
+@cli.group("gallery")
+def gallery_group():
+    """Browse, search, and download 110+ curated notebooks and AI recipes from MoLab."""
+    pass
+
+
+@gallery_group.command("list")
+@click.option("--limit", default=30, help="Maximum templates to display (default: 30)")
+@click.option("--as-json", is_flag=True)
+def cmd_gallery_list(limit: int, as_json: bool):
+    """List curated community notebook templates in MoLab Gallery."""
+    from molab_cli.gallery import GalleryManager
+    gm = GalleryManager()
+
+    with console.status("[bold cyan]Fetching MoLab gallery templates...[/bold cyan]"):
+        try:
+            templates = gm.list_templates()
+            if as_json:
+                console.print(json.dumps(templates[:limit], indent=2))
+                return
+
+            from rich.table import Table
+            table = Table(title=f"MoLab Community Gallery (Showing {min(len(templates), limit)} of {len(templates)})", border_style="cyan")
+            table.add_column("Slug", style="bold white")
+            table.add_column("Title", style="green")
+            table.add_column("Web URL", style="dim")
+
+            for t in templates[:limit]:
+                table.add_row(t["slug"], t["title"], t["url"])
+
+            console.print(table)
+            console.print(f"[dim]Search templates: [bold]molab gallery search <keyword>[/bold] | Info: [bold]molab gallery info <slug>[/bold][/dim]\n")
+        except Exception as e:
+            console.print(f"[red]Failed to list gallery templates:[/red] {e}")
+
+
+@gallery_group.command("search")
+@click.argument("query")
+@click.option("--as-json", is_flag=True)
+def cmd_gallery_search(query: str, as_json: bool):
+    """Search MoLab gallery templates by keyword or tag."""
+    from molab_cli.gallery import GalleryManager
+    gm = GalleryManager()
+
+    with console.status(f"[bold cyan]Searching gallery for '{query}'...[/bold cyan]"):
+        try:
+            results = gm.search_templates(query)
+            if as_json:
+                console.print(json.dumps(results, indent=2))
+                return
+
+            if not results:
+                console.print(f"[yellow]No gallery templates found matching '{query}'[/yellow]")
+                return
+
+            from rich.table import Table
+            table = Table(title=f"Gallery Search Results for '{query}' ({len(results)} matches)", border_style="cyan")
+            table.add_column("Slug", style="bold white")
+            table.add_column("Title", style="green")
+            table.add_column("Web URL", style="dim")
+
+            for t in results:
+                table.add_row(t["slug"], t["title"], t["url"])
+
+            console.print(table)
+        except Exception as e:
+            console.print(f"[red]Failed to search gallery:[/red] {e}")
+
+
+@gallery_group.command("info")
+@click.argument("slug")
+@click.option("--as-json", is_flag=True)
+def cmd_gallery_info(slug: str, as_json: bool):
+    """View metadata, description, and source repository links for a gallery template."""
+    from molab_cli.gallery import GalleryManager
+    gm = GalleryManager()
+
+    with console.status(f"[bold cyan]Fetching template details for '{slug}'...[/bold cyan]"):
+        try:
+            info = gm.get_template_info(slug)
+            if as_json:
+                console.print(json.dumps(info, indent=2))
+                return
+
+            from rich.panel import Panel
+            from rich.table import Table
+            grid = Table.grid(padding=(0, 2))
+            grid.add_column(style="bold cyan")
+            grid.add_column()
+
+            grid.add_row("Title:", f"[bold white]{info['title']}[/bold white]")
+            grid.add_row("Slug:", f"[dim]{info['slug']}[/dim]")
+            grid.add_row("Description:", info["description"])
+            grid.add_row("Gallery URL:", info["gallery_url"])
+            if info.get("github_url"):
+                grid.add_row("GitHub Source:", f"[green]{info['github_url']}[/green]")
+            if info.get("raw_download_url"):
+                grid.add_row("Raw Python URL:", f"[dim]{info['raw_download_url']}[/dim]")
+
+            panel = Panel(grid, title=f"[bold green]Template: {info['title']}[/bold green]", border_style="green")
+            console.print(panel)
+            console.print(f"[dim]Download: [bold]molab gallery download {info['slug']} {info['slug']}.py[/bold][/dim]\n")
+        except Exception as e:
+            console.print(f"[red]Failed to get template info:[/red] {e}")
+
+
+@gallery_group.command("download")
+@click.argument("slug")
+@click.argument("output_path", required=False)
+def cmd_gallery_download(slug: str, output_path: Optional[str]):
+    """Download raw runnable Python code for a gallery template."""
+    from molab_cli.gallery import GalleryManager
+    gm = GalleryManager()
+
+    out_file = output_path or f"{slug.replace('/', '_')}.py"
+    with console.status(f"[bold cyan]Downloading '{slug}' to {out_file}...[/bold cyan]"):
+        try:
+            gm.download_template(slug, out_file)
+            console.print(f"[bold green]✔ Successfully downloaded template to {out_file}![/bold green]")
+        except Exception as e:
+            console.print(f"[red]Failed to download template:[/red] {e}")
+
+
 def main():
     cli()
 

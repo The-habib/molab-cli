@@ -153,3 +153,37 @@ def test_package_management(mock_session):
     with patch("httpx.Client.post", return_value=mock_post):
         res = client.add_package("rich", upgrade=True)
         assert res["success"] is True
+
+
+def test_environment_and_diagnostics(mock_session):
+    client = MarimoBackendClient(mock_session)
+    mock_env = MagicMock()
+    mock_env.status_code = 200
+    mock_env.json.return_value = {
+        "OS": "Linux",
+        "OS Version": "4.19.0-gvisor",
+        "Python Version": "3.13.11",
+    }
+
+    mock_conn = MagicMock()
+    mock_conn.status_code = 200
+    mock_conn.json.return_value = {"active": 2}
+
+    mock_thumb = MagicMock()
+    mock_thumb.status_code = 200
+    mock_thumb.content = b"<svg>thumbnail</svg>"
+
+    with patch("httpx.Client.get") as mock_get:
+        mock_get.return_value = mock_env
+        env = client.get_environment()
+        assert env["OS Version"] == "4.19.0-gvisor"
+        assert env["Python Version"] == "3.13.11"
+
+        mock_get.return_value = mock_conn
+        conns = client.get_connections()
+        assert conns["active"] == 2
+
+        mock_get.return_value = mock_thumb
+        thumb = client.get_thumbnail()
+        assert "<svg>" in thumb
+

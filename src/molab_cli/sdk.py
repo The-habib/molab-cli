@@ -9,6 +9,7 @@ from molab_cli.backend import MarimoBackendClient
 from molab_cli.capabilities import discover_capabilities, run_doctor
 from molab_cli.client import MoLabClient
 from molab_cli.execution import ExecutionResult, RemoteExecutor
+from molab_cli.gallery import GalleryManager
 from molab_cli.jobs import JobManager
 from molab_cli.keepalive import KeepaliveManager
 from molab_cli.sandbox import SandboxSession
@@ -190,6 +191,26 @@ class Pod:
     def add_package(self, package_name: str, upgrade: bool = False) -> Dict[str, Any]:
         """Install package via native REST API."""
         return self.backend.add_package(package_name=package_name, upgrade=upgrade)
+
+    def environment(self) -> Dict[str, Any]:
+        """Fetch remote environment specifications (OS, gVisor, Python, Node, uv, dependencies)."""
+        return self.backend.get_environment()
+
+    def server_status(self) -> Dict[str, Any]:
+        """Fetch remote server health, filenames, and active sessions."""
+        return self.backend.get_server_status()
+
+    def connections(self) -> Dict[str, Any]:
+        """Fetch count of active client connections to remote Marimo server."""
+        return self.backend.get_connections()
+
+    def sessions(self) -> Dict[str, Any]:
+        """Fetch active notebook sessions."""
+        return self.backend.get_sessions()
+
+    def thumbnail(self, output_path: Optional[str] = None) -> Union[str, bytes]:
+        """Generate and retrieve visual Open Graph SVG thumbnail of the notebook."""
+        return self.backend.get_thumbnail(output_path=output_path)
 
     # -------------------------------------------------------------------------
     # Snapshot & Persistence Subsystem
@@ -437,5 +458,31 @@ class MoLabSDK:
         """Make a pod permanent with wake-lock, in-pod guard, vault, and keepalive daemon."""
         pod = self.get_pod(notebook_id)
         return pod.make_permanent(interval=interval, auto_pack=auto_pack)
+
+    # -------------------------------------------------------------------------
+    # MoLab Community Gallery & Templates
+    # -------------------------------------------------------------------------
+
+    @property
+    def gallery(self) -> GalleryManager:
+        """Access MoLab community gallery templates."""
+        return GalleryManager(self.client)
+
+    def gallery_list(self) -> List[Dict[str, str]]:
+        """List community gallery templates."""
+        return self.gallery.list_templates()
+
+    def gallery_search(self, query: str) -> List[Dict[str, str]]:
+        """Search community gallery templates."""
+        return self.gallery.search_templates(query)
+
+    def gallery_info(self, slug: str) -> Dict[str, Any]:
+        """Get details for a gallery template."""
+        return self.gallery.get_template_info(slug)
+
+    def gallery_download(self, slug: str, output_path: str) -> str:
+        """Download Python code for a gallery template."""
+        return self.gallery.download_template(slug, output_path)
+
 
 

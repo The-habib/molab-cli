@@ -627,3 +627,66 @@ Permanent workspace persistence stored directly inside `/marimo/notebook.py` met
   # Extract files back to /workspace:
   molab vault unpack nb_emuqXoWkVed6jPNZxND7eo
   ```
+
+---
+
+## 15. Remote Environment Diagnostics & Media (v2.3)
+
+### `molab env [notebook_id]`
+Inspect remote pod environment specifications, including operating system kernel (gVisor), Python runtime version, Node.js version, uv package manager version, and pre-installed AI/ML libraries.
+* **Flags:**
+  * `--as-json`: Output machine-readable JSON format.
+* **Example:**
+  ```bash
+  # Check environment on running pod:
+  molab env nb_emuqXoWkVed6jPNZxND7eo
+
+  # Auto-select first active pod and output JSON:
+  molab env --as-json
+  ```
+
+### `molab thumbnail <notebook_id> [output_file]`
+Generate and download a visual Open Graph dynamic SVG thumbnail of the remote notebook canvas.
+* **Options:**
+  * `-o, --output <file>`: Output SVG file path (default: `thumbnail.svg`).
+* **Example:**
+  ```bash
+  molab thumbnail nb_emuqXoWkVed6jPNZxND7eo -o notebook_preview.svg
+  ```
+
+### `molab connections <notebook_id>`
+Audit active WebSocket client connections to the remote Marimo server.
+* **Flags:**
+  * `--as-json`: Output JSON summary.
+* **Example:**
+  ```bash
+  molab connections nb_emuqXoWkVed6jPNZxND7eo
+  ```
+
+---
+
+## 16. MoLab Community Gallery & Templates (v2.3)
+
+### `molab gallery <subcommand> [args]`
+Browse, search, inspect, and download 111+ curated AI templates, interactive notebooks, and production recipes from MoLab Gallery (`https://molab.run/gallery`).
+
+* **Subcommands:**
+  * `list`: List community templates (`--limit <n>`, `--as-json`).
+  * `search <query>`: Search templates by keyword or tag (`--as-json`).
+  * `info <slug>`: Inspect template description, author, gallery URL, and GitHub source (`--as-json`).
+  * `download <slug> [output_path]`: Download runnable Python code for the template.
+
+* **Example:**
+  ```bash
+  # List top 20 community templates:
+  molab gallery list --limit 20
+
+  # Search for diffusion or LLM recipes:
+  molab gallery search "diffusion"
+
+  # View template info:
+  molab gallery info "stable-diffusion-3"
+
+  # Download template script:
+  molab gallery download "stable-diffusion-3" ./sd3_pipeline.py
+  ```

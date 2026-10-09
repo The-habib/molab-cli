@@ -14,6 +14,7 @@ from molab_cli.backend import MarimoBackendClient
 from molab_cli.capabilities import discover_capabilities, run_doctor
 from molab_cli.client import MoLabClient
 from molab_cli.execution import RemoteExecutor
+from molab_cli.gallery import GalleryManager
 from molab_cli.jobs import JobManager
 from molab_cli.keepalive import KeepaliveManager
 from molab_cli.sandbox import SandboxSession
@@ -553,6 +554,72 @@ class MoLabMCPServer:
                     "required": ["notebook_id"],
                 },
             },
+            {
+                "name": "molab_remote_environment",
+                "description": "Query remote pod environment specifications (OS, gVisor, Python, Node, uv, dependencies, and CUDA).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_get_thumbnail",
+                "description": "Generate visual Open Graph SVG thumbnail of the remote notebook.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "output_path": {"type": "string", "description": "Optional local file path to save SVG thumbnail"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_get_connections",
+                "description": "Audit active WebSocket client connections to the remote Marimo server.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_gallery_list",
+                "description": "List curated community notebook templates and neural recipes in the MoLab Gallery.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "description": "Max templates to return (default: 50)"},
+                    },
+                },
+            },
+            {
+                "name": "molab_gallery_search",
+                "description": "Search MoLab gallery templates by keyword, topic, or tag.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query keyword"},
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "molab_gallery_info",
+                "description": "Fetch metadata, description, and source repository links for a MoLab gallery template.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "slug": {"type": "string", "description": "Gallery template slug (e.g. neural-thickets)"},
+                    },
+                    "required": ["slug"],
+                },
+            },
         ]
 
     def execute_tool(self, name: str, args: Dict[str, Any]) -> Any:
@@ -841,6 +908,31 @@ class MoLabMCPServer:
         elif name == "molab_vault_inspect":
             vault = MoLabVault(args["notebook_id"])
             return vault.inspect_vault()
+
+        elif name == "molab_remote_environment":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            return MarimoBackendClient(session).get_environment()
+
+        elif name == "molab_get_thumbnail":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            res = MarimoBackendClient(session).get_thumbnail(output_path=args.get("output_path"))
+            return {"thumbnail": res if isinstance(res, str) else "Saved to file"}
+
+        elif name == "molab_get_connections":
+            session = SandboxSession(args["notebook_id"], client=self.client)
+            return MarimoBackendClient(session).get_connections()
+
+        elif name == "molab_gallery_list":
+            gm = GalleryManager(self.client)
+            return gm.list_templates()[:int(args.get("limit", 50))]
+
+        elif name == "molab_gallery_search":
+            gm = GalleryManager(self.client)
+            return gm.search_templates(args["query"])
+
+        elif name == "molab_gallery_info":
+            gm = GalleryManager(self.client)
+            return gm.get_template_info(args["slug"])
 
         raise ValueError(f"Unknown tool: {name}")
 

@@ -15,8 +15,8 @@
   <a href="#"><img src="https://img.shields.io/badge/Transfer-Native%20HTTP%2F2%20Streaming-success.svg" alt="File Transfer"></a>
   <a href="#"><img src="https://img.shields.io/badge/Jobs-SQLite%20DAG%20%26%20Batch%20Queue-orange.svg" alt="Jobs"></a>
   <a href="#"><img src="https://img.shields.io/badge/Persistence-100%25%20On--MoLab%20Vault%20%26%20Keepalive-emerald.svg" alt="Persistence"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(42%20Tools)-purple.svg" alt="MCP"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-92%20Passed%20(100%25)-success.svg" alt="Tests"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(48%20Tools)-purple.svg" alt="MCP"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-97%20Passed%20(100%25)-success.svg" alt="Tests"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-Termux%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
@@ -84,6 +84,9 @@ Provide AI agents in Cursor, Claude Desktop, and Antigravity with native capabil
 |   ├── backend.py       : Native Marimo REST & WebSocket client (export, eval, files)|
 |   ├── workloads.py     : Pluggable AI workload templates & parameter schemas  |
 |   ├── services.py      : Model server lifecycle & application health checks   |
+|   ├── gallery.py       : MoLab Gallery client (111+ curated AI recipes)       |
+|   ├── vault.py         : 100% on-MoLab In-Notebook Vault persistence          |
+|   ├── keepalive.py     : Dual-loop anti-idle supervisor daemon                |
 |   └── sdk.py           : High-level typed Python SDK for automated scripts    |
 +-------------------------------------------------------------------------------+
          │                                                      │
@@ -395,6 +398,35 @@ molab vault inspect <id>
 molab vault unpack <id>
 ```
 
+### 13. MoLab Community Gallery & AI Templates (v2.3)
+Browse and download 111+ curated community recipes directly from `https://molab.run/gallery`:
+```bash
+# List community templates:
+molab gallery list --limit 20
+
+# Search for specialized workflows:
+molab gallery search "diffusion"
+
+# View recipe info and GitHub source:
+molab gallery info "chat-with-pdf"
+
+# Download runnable code:
+molab gallery download "chat-with-pdf" ./chat.py
+```
+
+### 14. Remote Diagnostics & Visual Previews (v2.3)
+Audit container runtime specs and generate dynamic Open Graph SVG thumbnails:
+```bash
+# Query gVisor kernel, Python 3.13, Node v22, uv, and dependencies:
+molab env <id>
+
+# Generate and download visual Open Graph preview:
+molab thumbnail <id> -o preview.svg
+
+# Audit active WebSocket connections:
+molab connections <id>
+```
+
 ---
 
 ## 🤖 Model Context Protocol (MCP) Integration
@@ -412,7 +444,7 @@ molab vault unpack <id>
 }
 ```
 
-### Exposed MCP Tools (42 Typed Tools):
+### Exposed MCP Tools (48 Typed Tools):
 - **`molab_doctor`**: Diagnose environment health and connectivity.
 - **`molab_capabilities`**: Discover supported hardware, storage, and runtimes.
 - **`molab_list_pods`**: List all notebooks and active sandboxes.
@@ -455,6 +487,12 @@ molab vault unpack <id>
 - **`molab_storage_backup`**: Sync pod directory directly to S3/R2/B2/GCS via rclone.
 - **`molab_storage_restore`**: Restore pod directory directly from cloud via rclone.
 - **`molab_storage_hf_pull`**: Download model/dataset directly from Hugging Face Hub to pod.
+- **`molab_remote_environment`**: Query remote pod environment specifications (OS, gVisor, Python, Node, uv, dependencies).
+- **`molab_get_thumbnail`**: Generate visual Open Graph SVG thumbnail of the remote notebook.
+- **`molab_get_connections`**: Audit active WebSocket client connections to the remote Marimo server.
+- **`molab_gallery_list`**: List curated community notebook templates in MoLab Gallery.
+- **`molab_gallery_search`**: Search MoLab gallery templates by keyword or tag.
+- **`molab_gallery_info`**: Fetch metadata, description, and source repository links for a gallery recipe.
 
 ---
 
@@ -522,12 +560,16 @@ if status["status"] == "COMPLETED":
 
 ---
 
-## 📚 Complete Documentation Suite
+## 📚 Complete Studio-Grade Documentation Suite
 
-- 🏛️ **[Technical Architecture & Protocols](docs/ARCHITECTURE.md)**: Deep dive into network gateways, Clerk auto-minting, and SQLite job persistence.
-- 📖 **[Command-Line Reference](docs/CLI_REFERENCE.md)**: Syntax, options, and JSON examples for all commands.
-- 🤖 **[Autonomous Agent Guide](docs/AGENT_GUIDE.md)**: Best practices, safety rules, and Python SDK recipes for AI coding agents.
-- 🍳 **[Workload Recipes](docs/RECIPES.md)**: Step-by-step guides for 4K video neural enhancement, vLLM serving, and LoRA training.
+- 🐍 **[Python SDK API Reference](docs/API_REFERENCE.md)**: Exhaustive reference for `MoLabSDK`, `Pod`, `MoLabVault`, `KeepaliveManager`, `GalleryManager`, `BatchOrchestrator`, and `MarimoBackendClient`.
+- 🤖 **[Model Context Protocol (MCP) Guide](docs/MCP_GUIDE.md)**: Complete guide to all 48 typed tools with schemas, agent workflows, and Claude/Cursor configurations.
+- 🛡️ **[Permanence & Keepalive Guide](docs/PERMANENCE_GUIDE.md)**: Architecture of the 100% on-MoLab vault, in-pod guard, and dual-loop anti-idle supervisor.
+- ⚡ **[Multi-Pod Batch Orchestration](docs/BATCH_ORCHESTRATION.md)**: DAG pipeline scheduling, dynamic worker pools, retries, and matrix parameter sweeps.
+- 🍳 **[Production Workload Cookbook](docs/WORKLOAD_COOKBOOK.md)**: Battle-tested recipes for Real-ESRGAN 4K remastering, vLLM / Ollama serving, Whisper transcription, LoRA fine-tuning, and SDXL.
+- 📖 **[Command-Line Reference](docs/CLI_REFERENCE.md)**: Full manual covering all 16 command groups and flags.
+- 🏛️ **[Technical Architecture & Protocols](docs/ARCHITECTURE.md)**: Deep dive into network gateways, Starlette REST acceleration, and Clerk auto-minting.
+- 🤖 **[Autonomous Agent Guide](docs/AGENT_GUIDE.md)**: Operational rules, memory safeguards, and safety runbooks for AI coding agents.
 - 🔧 **[Troubleshooting Runbook](docs/TROUBLESHOOTING.md)**: Diagnosing Clerk 401s, WebSocket disconnects, and OOM exceptions.
 
 ---

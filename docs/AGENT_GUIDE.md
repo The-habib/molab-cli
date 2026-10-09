@@ -105,7 +105,7 @@ Any MCP-compatible client (Claude Desktop, Cursor, Antigravity) can connect dire
   }
 }
 ```
-Exposes 29 typed tools for pod discovery, command execution, streaming transfers, SQLite job tracking, batch pipeline orchestration, native kernel scratchpad evaluation (`molab_kernel_eval`), notebook export (`molab_export_notebook`), and server-side file management (`molab_file_list`, `molab_file_details`, `molab_file_search`).
+Exposes **48 typed tools** across 9 functional categories for pod discovery, command execution, streaming transfers, SQLite job tracking, batch pipeline orchestration, native kernel scratchpad evaluation (`molab_kernel_eval`), notebook export (`molab_export_notebook`), server-side file management (`molab_file_list`, `molab_file_details`, `molab_file_search`), 100% on-MoLab vault persistence (`molab_vault_pack`, `molab_vault_unpack`), and MoLab community gallery exploration (`molab_gallery_list`, `molab_gallery_search`, `molab_gallery_info`). See [docs/MCP_GUIDE.md](file:///data/data/com.termux/files/home/molab-cli/docs/MCP_GUIDE.md) for full details.
 
 ---
 

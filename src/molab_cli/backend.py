@@ -104,11 +104,72 @@ class MarimoBackendClient:
     def get_server_version(self) -> str:
         """Fetch remote Marimo version string."""
         url = f"{self.base_url}/api/version?token={self.token}"
+        headers = {"Authorization": f"Bearer {self.token}"}
         with self._http_client() as client:
-            resp = client.get(url)
+            resp = client.get(url, headers=headers)
             if resp.status_code == 200:
                 return resp.text.strip().strip('"')
             return "unknown"
+
+    def get_environment(self) -> Dict[str, Any]:
+        """Fetch complete remote system environment specs (OS, gVisor, Python, Node, uv, dependencies)."""
+        url = f"{self.base_url}/api/environment?token={self.token}"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        with self._http_client() as client:
+            resp = client.get(url, headers=headers)
+            if resp.status_code != 200:
+                raise MarimoBackendError(f"Failed to fetch environment: {resp.text}", status_code=resp.status_code)
+            return resp.json()
+
+    def get_server_status(self) -> Dict[str, Any]:
+        """Fetch server health, notebook filenames, active sessions, and LSP state."""
+        url = f"{self.base_url}/api/status?token={self.token}"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        with self._http_client() as client:
+            resp = client.get(url, headers=headers)
+            if resp.status_code != 200:
+                raise MarimoBackendError(f"Failed to fetch server status: {resp.text}", status_code=resp.status_code)
+            return resp.json()
+
+    def get_connections(self) -> Dict[str, Any]:
+        """Fetch active WebSocket connection counts."""
+        url = f"{self.base_url}/api/status/connections?token={self.token}"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        with self._http_client() as client:
+            resp = client.get(url, headers=headers)
+            if resp.status_code != 200:
+                raise MarimoBackendError(f"Failed to fetch connections: {resp.text}", status_code=resp.status_code)
+            return resp.json()
+
+    def get_sessions(self) -> Dict[str, Any]:
+        """Fetch dictionary of active notebook sessions."""
+        url = f"{self.base_url}/api/sessions?token={self.token}"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        with self._http_client() as client:
+            resp = client.get(url, headers=headers)
+            if resp.status_code != 200:
+                raise MarimoBackendError(f"Failed to fetch sessions: {resp.text}", status_code=resp.status_code)
+            return resp.json()
+
+    def get_thumbnail(self, output_path: Optional[str] = None) -> Union[str, bytes]:
+        """Generate and retrieve visual Open Graph SVG thumbnail of the notebook."""
+        url = f"{self.base_url}/og/thumbnail?token={self.token}"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        with self._http_client() as client:
+            resp = client.get(url, headers=headers)
+            if resp.status_code != 200:
+                raise MarimoBackendError(f"Failed to generate thumbnail: {resp.text}", status_code=resp.status_code)
+            content = resp.content
+
+        if output_path:
+            with open(output_path, "wb") as f:
+                f.write(content)
+            return output_path
+
+        try:
+            return content.decode("utf-8")
+        except Exception:
+            return content
 
     # =========================================================================
     # Native Server-Side File Operations
