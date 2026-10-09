@@ -1,6 +1,7 @@
 """
-Interactive Control Center & TUI Dashboard for MoLab CLI.
-Provides zero-typing navigation, pod management, and AI model controls.
+Interactive Control Center & Modern TUI Dashboard for MoLab CLI.
+Provides zero-typing navigation, pod management, AI model controls,
+100% on-MoLab vault persistence, community gallery explorer, and job monitoring.
 """
 
 import os
@@ -15,8 +16,12 @@ from rich.text import Text
 from rich.markdown import Markdown
 
 from molab_cli.auth import inspect_auth_status, save_and_verify_auth
+from molab_cli.backend import MarimoBackendClient
 from molab_cli.client import MoLabClient
 from molab_cli.config import save_config
+from molab_cli.gallery import GalleryManager
+from molab_cli.jobs import JobManager
+from molab_cli.keepalive import KeepaliveManager
 from molab_cli.onboarding import ensure_authenticated, run_onboarding_wizard
 from molab_cli.sandbox import LocalHttpForwarder, SandboxSession
 from molab_cli.theme import (
@@ -31,13 +36,16 @@ from molab_cli.theme import (
     render_success_card,
     render_warning_card,
 )
+from molab_cli.vault import MoLabVault
+from molab_cli.workloads import WorkloadRegistry
 
 
 def pick_notebook(client: MoLabClient, title: str = "Select a notebook:") -> Optional[Dict[str, Any]]:
-    """Interactive notebook selector."""
-    with console.status("[bold cyan]Fetching notebooks from MoLab...[/bold cyan]"):
+    """Interactive notebook selector with smart occupancy audits."""
+    with console.status("[bold cyan]Auditing notebooks and Blackwell pods...[/bold cyan]"):
         try:
             notebooks = client.list_notebooks()
+            running = client.list_running_sandboxes()
         except Exception as e:
             render_error_card("Failed to Fetch Notebooks", str(e))
             return None
@@ -51,10 +59,20 @@ def pick_notebook(client: MoLabClient, title: str = "Select a notebook:") -> Opt
         nb_id = nb["id"]
         t = nb.get("title", "Untitled")
         gpu = nb.get("gpu", "")
-        is_running = nb.get("running", False)
+        is_running = nb_id in running
 
         hw_tag = "⚡ Blackwell 96GB" if "rtx" in gpu.lower() or "blackwell" in gpu.lower() else "CPU"
-        status_tag = "🟢 RUNNING" if is_running else "⚪ STOPPED"
+
+        if is_running:
+            try:
+                sess = SandboxSession(nb_id, client=client)
+                wl = sess.get_workload_status()
+                is_free = not wl.get("is_occupied", False)
+                status_tag = "🟢 ★ FREE" if is_free else "🟡 ⚠️ OCCUPIED"
+            except Exception:
+                status_tag = "🟢 RUNNING"
+        else:
+            status_tag = "⚪ STOPPED"
 
         label = f"{status_tag} | {t} ({hw_tag}) [{nb_id}]"
         choices.append(questionary.Choice(title=label, value=nb))
@@ -76,23 +94,24 @@ def action_browse_notebooks(client: MoLabClient) -> None:
         with console.status("[bold cyan]Loading notebooks...[/bold cyan]"):
             try:
                 notebooks = client.list_notebooks()
+                running = client.list_running_sandboxes()
             except Exception as e:
                 render_error_card("Error Fetching Notebooks", str(e))
                 return
 
         # Render Table
         table = Table(
-            title="[bold cyan]📓 Cloud Notebooks Workspace[/bold cyan]",
+            title="[bold cyan]📓 Cloud Notebooks Workspace (NVIDIA Blackwell Fabric)[/bold cyan]",
             border_style="cyan",
             expand=True,
         )
-        table.add_column("Status", justify="center", width=12)
+        table.add_column("Status", justify="center", width=14)
         table.add_column("Notebook Title", style="bold white", ratio=2)
         table.add_column("Compute Hardware", justify="center", width=22)
         table.add_column("ID", style="dim", width=26)
 
         for nb in notebooks:
-            is_running = nb.get("running", False)
+            is_running = nb["id"] in running
             gpu = nb.get("gpu", "")
             status_text = "[bold green]🟢 RUNNING[/bold green]" if is_running else "[dim]⚪ STOPPED[/dim]"
             hw_text = "[bold #76b900]⚡ Blackwell 96GB[/bold #76b900]" if "rtx" in gpu.lower() else "[cyan]4 vCPU / 32GB[/cyan]"
@@ -101,7 +120,7 @@ def action_browse_notebooks(client: MoLabClient) -> None:
         console.print(table)
 
         choices = [
-            "🔍 Select Notebook for Actions (Terminal, AI, Compute, etc.)",
+            "🔍 Select Notebook for Actions (Terminal, Vault, AI, Telemetry)",
             "🚀 Create New Notebook Pod",
             "⬅️ Back to Main Menu",
         ]
@@ -118,11 +137,10 @@ def action_browse_notebooks(client: MoLabClient) -> None:
 
 
 def manage_single_notebook(client: MoLabClient, nb: Dict[str, Any]) -> None:
-    """Action menu for a specific selected notebook."""
+    """Comprehensive action menu for a specific selected notebook."""
     nb_id = nb["id"]
 
     while True:
-        # Re-inspect to get live data
         with console.status("[bold cyan]Refreshing notebook state...[/bold cyan]"):
             try:
                 info = client.inspect_notebook(nb_id)
@@ -136,13 +154,13 @@ def manage_single_notebook(client: MoLabClient, nb: Dict[str, Any]) -> None:
         hw_label = "NVIDIA RTX PRO 6000 Blackwell Server Edition (96GB VRAM)" if "rtx" in gpu.lower() else "CPU (4 vCPUs, 32GB RAM)"
 
         panel_content = Text()
-        panel_content.append(f"Title:    ", style="dim")
+        panel_content.append("Title:    ", style="dim")
         panel_content.append(f"{title}\n", style="bold white")
-        panel_content.append(f"ID:       ", style="dim")
+        panel_content.append("ID:       ", style="dim")
         panel_content.append(f"{nb_id}\n", style="cyan")
-        panel_content.append(f"Compute:  ", style="dim")
+        panel_content.append("Compute:  ", style="dim")
         panel_content.append(f"{hw_label}\n", style="bold #76b900" if "rtx" in gpu.lower() else "white")
-        panel_content.append(f"Sandbox:  ", style="dim")
+        panel_content.append("Sandbox:  ", style="dim")
         panel_content.append(f"{sb_id}\n", style="dim")
 
         console.print(Panel(
@@ -155,8 +173,13 @@ def manage_single_notebook(client: MoLabClient, nb: Dict[str, Any]) -> None:
             "💻 Open Interactive Root Terminal (bash)",
             "💬 Chat with Deployed 27B LLM (Terminal Chat)",
             "🌐 Start Localhost Bridge (port 8000 -> http://localhost:8000/v1)",
+            "🛡️ In-Notebook Vault: Pack Workspace (100% on MoLab)",
+            "📦 In-Notebook Vault: Unpack / Restore Workspace",
+            "⏱️ Make Pod Permanent (Anti-Idle & Supervisor)",
+            "📊 Real-time GPU & Host Telemetry",
+            "🔬 Remote Container Environment Diagnostics",
+            "🖼️ Generate Open Graph SVG Thumbnail",
             "⚡ Switch Compute (NVIDIA Blackwell 96GB ⟷ CPU)",
-            "📊 Real-time GPU Telemetry & VRAM",
             "📝 View Python Code (cat)",
             "📦 Install Python Packages",
             "🛑 Stop / Shutdown Sandbox Pod",
@@ -170,10 +193,11 @@ def manage_single_notebook(client: MoLabClient, nb: Dict[str, Any]) -> None:
         if not choice or "Back" in choice:
             break
 
+        session = SandboxSession(nb_id, client=client)
+
         if "Open Interactive Root Terminal" in choice:
             console.print(f"[bold cyan]Connecting to interactive bash on {title}...[/bold cyan]")
             try:
-                session = SandboxSession(nb_id, client=client)
                 session.interactive_shell()
             except Exception as e:
                 render_error_card("Terminal Connection Error", str(e))
@@ -183,6 +207,73 @@ def manage_single_notebook(client: MoLabClient, nb: Dict[str, Any]) -> None:
 
         elif "Start Localhost Bridge" in choice:
             action_localhost_bridge(nb_id)
+
+        elif "Pack Workspace" in choice:
+            with console.status("[bold cyan]Packing /workspace into in-notebook vault on MoLab...[/bold cyan]"):
+                try:
+                    vault = MoLabVault(session)
+                    res = vault.pack_workspace()
+                    render_success_card(
+                        "Vault Packed Successfully!",
+                        f"Status: {res['status']}\nStored in /marimo/notebook.py metadata.\nZero local phone storage used."
+                    )
+                except Exception as e:
+                    render_error_card("Vault Pack Failed", str(e))
+            questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
+
+        elif "Unpack" in choice:
+            with console.status("[bold cyan]Unpacking in-notebook vault into /workspace...[/bold cyan]"):
+                try:
+                    vault = MoLabVault(session)
+                    res = vault.unpack_workspace()
+                    render_success_card("Vault Restored!", f"Files restored into /workspace successfully.")
+                except Exception as e:
+                    render_error_card("Vault Unpack Failed", str(e))
+            questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
+
+        elif "Make Pod Permanent" in choice:
+            with console.status("[bold green]Arming 24/7 permanence engine...[/bold green]"):
+                try:
+                    km = KeepaliveManager()
+                    d = km.start_daemon(notebook_id=nb_id, auto_restore=True)
+                    render_success_card(
+                        "Pod Made Permanent!",
+                        f"Daemon PID: {d['pid']}\nHeartbeat every 120s.\nAuto-restores if pod resets."
+                    )
+                except Exception as e:
+                    render_error_card("Permanence Failed", str(e))
+            questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
+
+        elif "Real-time GPU & Host Telemetry" in choice:
+            display_gpu_telemetry(nb_id)
+
+        elif "Remote Container Environment Diagnostics" in choice:
+            with console.status("[bold cyan]Fetching container runtime specifications...[/bold cyan]"):
+                try:
+                    backend = MarimoBackendClient(session)
+                    env = backend.get_environment()
+                    t = Table(title=f"Remote Environment: {title}", border_style="cyan")
+                    t.add_column("Property", style="bold white")
+                    t.add_column("Value", style="green")
+                    t.add_row("Operating System", f"{env.get('OS', 'Linux')} ({env.get('OS Version', '')})")
+                    t.add_row("Python Runtime", env.get("Python Version", "3.13"))
+                    t.add_row("Node.js Runtime", env.get("Binaries", {}).get("Node", "v22"))
+                    t.add_row("uv Package Manager", env.get("Binaries", {}).get("uv", "0.12.1"))
+                    console.print(t)
+                except Exception as e:
+                    render_error_card("Environment Query Failed", str(e))
+            questionary.text("Press Enter to return...", style=QUESTIONARY_STYLE).ask()
+
+        elif "Generate Open Graph SVG Thumbnail" in choice:
+            out_file = f"thumbnail_{nb_id[:8]}.svg"
+            with console.status(f"[bold cyan]Generating visual thumbnail ({out_file})...[/bold cyan]"):
+                try:
+                    backend = MarimoBackendClient(session)
+                    backend.get_thumbnail(output_path=out_file)
+                    render_success_card("Thumbnail Generated!", f"Saved to local file: [bold white]{out_file}[/bold white]")
+                except Exception as e:
+                    render_error_card("Thumbnail Error", str(e))
+            questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
 
         elif "Switch Compute" in choice:
             new_hw = questionary.select(
@@ -209,14 +300,10 @@ def manage_single_notebook(client: MoLabClient, nb: Dict[str, Any]) -> None:
                     except Exception as e:
                         render_error_card("Compute Update Failed", str(e))
 
-        elif "Real-time GPU Telemetry" in choice:
-            display_gpu_telemetry(nb_id)
-
         elif "View Python Code" in choice:
             with console.status("[bold cyan]Fetching code...[/bold cyan]"):
                 try:
-                    sess = SandboxSession(nb_id, client=client)
-                    cfg, cells = sess.fetch_notebook_cells()
+                    cfg, cells = session.fetch_notebook_cells()
                     if cells:
                         for idx, cell in enumerate(cells, 1):
                             code = cell.get("code", "")
@@ -236,8 +323,7 @@ def manage_single_notebook(client: MoLabClient, nb: Dict[str, Any]) -> None:
             if pkgs and pkgs.strip():
                 with console.status(f"[bold cyan]Installing '{pkgs}' in remote pod...[/bold cyan]"):
                     try:
-                        sess = SandboxSession(nb_id, client=client)
-                        out = sess.execute_command(f"uv pip install {pkgs.strip()}", timeout=120.0)
+                        out = session.execute_command(f"uv pip install {pkgs.strip()}", timeout=120.0)
                         console.print(Panel(out, title="Installation Output", border_style="cyan"))
                     except Exception as e:
                         render_error_card("Install Failed", str(e))
@@ -248,110 +334,284 @@ def manage_single_notebook(client: MoLabClient, nb: Dict[str, Any]) -> None:
                 with console.status("[bold yellow]Stopping container pod...[/bold yellow]"):
                     try:
                         client.stop_notebook(nb_id)
-                        render_success_card("Pod Stopped", f"Container for notebook {nb_id} has been shutdown.")
+                        render_success_card("Pod Stopped", f"Container for {title} stopped.")
+                        break
                     except Exception as e:
                         render_error_card("Stop Failed", str(e))
 
-        elif "Duplicate / Clone Notebook" in choice:
-            with console.status("[bold cyan]Cloning notebook...[/bold cyan]"):
-                try:
-                    new_id = client.duplicate_notebook(nb_id)
-                    render_success_card("Notebook Duplicated", f"New notebook created: {new_id}")
-                except Exception as e:
-                    render_error_card("Clone Failed", str(e))
 
-        elif "Rename Notebook" in choice:
-            new_title = questionary.text("Enter new title:", default=title, style=QUESTIONARY_STYLE).ask()
-            if new_title and new_title.strip() and new_title != title:
-                with console.status("[bold cyan]Renaming notebook...[/bold cyan]"):
+def action_community_gallery(client: MoLabClient) -> None:
+    """Interactive explorer for MoLab 111+ community neural recipes."""
+    gm = GalleryManager()
+    while True:
+        choices = [
+            "🔍 Search Recipes by Keyword (diffusion, chat, audio, etc.)",
+            "📋 Browse Top Community Recipes",
+            "⬅️ Back to Main Menu",
+        ]
+        choice = questionary.select("MoLab Community Gallery:", choices=choices, style=QUESTIONARY_STYLE).ask()
+        if not choice or "Back" in choice:
+            break
+
+        templates = []
+        if "Search" in choice:
+            q = questionary.text("Enter search query:", style=QUESTIONARY_STYLE).ask()
+            if not q:
+                continue
+            with console.status(f"[bold cyan]Searching for '{q}'...[/bold cyan]"):
+                templates = gm.search_templates(q)
+        else:
+            with console.status("[bold cyan]Fetching community templates...[/bold cyan]"):
+                templates = gm.list_templates()[:25]
+
+        if not templates:
+            console.print("[yellow]No templates found.[/yellow]")
+            continue
+
+        template_choices = [
+            questionary.Choice(title=f"⚡ {t['title']} ({t['slug']})", value=t)
+            for t in templates
+        ]
+        template_choices.append(questionary.Choice(title="⬅️ Back", value=None))
+
+        selected = questionary.select("Select a recipe to inspect/download:", choices=template_choices, style=QUESTIONARY_STYLE).ask()
+        if not selected:
+            continue
+
+        slug = selected["slug"]
+        info = gm.get_template_info(slug)
+        console.print(Panel(
+            f"[bold white]{info['title']}[/bold white]\n"
+            f"[dim]Slug: {info['slug']}[/dim]\n\n"
+            f"{info['description']}\n\n"
+            f"[cyan]Gallery URL:[/cyan] {info['gallery_url']}\n"
+            f"[green]GitHub Source:[/green] {info.get('github_url', 'N/A')}",
+            title="[bold green]Recipe Details[/bold green]",
+            border_style="green",
+        ))
+
+        act = questionary.select(
+            "Action for this recipe:",
+            choices=[
+                "⬇️ Download Python Code Locally",
+                "🚀 Download & Push Directly to Pod",
+                "⬅️ Back",
+            ],
+            style=QUESTIONARY_STYLE,
+        ).ask()
+
+        if act and "Download Python Code Locally" in act:
+            out_file = f"{slug.replace('/', '_')}.py"
+            gm.download_template(slug, out_file)
+            render_success_card("Downloaded!", f"Saved template to: [bold white]{out_file}[/bold white]")
+        elif act and "Push Directly to Pod" in act:
+            nb = pick_notebook(client, "Select pod destination:")
+            if nb:
+                temp_file = f"/tmp/{slug.replace('/', '_')}.py"
+                gm.download_template(slug, temp_file)
+                sess = SandboxSession(nb["id"], client=client)
+                sess.push_file(temp_file, f"/workspace/{slug.replace('/', '_')}.py")
+                render_success_card("Deployed to Pod!", f"Uploaded to /workspace/{slug.replace('/', '_')}.py")
+
+
+def action_vault_permanence(client: MoLabClient) -> None:
+    """Dedicated hub for 100% on-MoLab vault and anti-idle supervision."""
+    km = KeepaliveManager()
+    while True:
+        choices = [
+            "🛡️ 1-Click Make Pod Permanent (Infinite Anti-Idle + Vault)",
+            "📦 Pack Workspace to Cloud Vault (0 Phone Storage)",
+            "📂 Unpack Workspace from Cloud Vault",
+            "🔍 Inspect In-Notebook Vault on MoLab",
+            "📊 View Keepalive Supervisor Daemons & Logs",
+            "🛑 Stop Keepalive Daemon",
+            "⬅️ Back to Main Menu",
+        ]
+        choice = questionary.select("100% On-MoLab Permanence Hub:", choices=choices, style=QUESTIONARY_STYLE).ask()
+        if not choice or "Back" in choice:
+            break
+
+        if "Make Pod Permanent" in choice:
+            nb = pick_notebook(client, "Select pod to make permanent:")
+            if nb:
+                with console.status("[bold green]Arming permanent supervisor...[/bold green]"):
                     try:
-                        client.rename_notebook(nb_id, new_title.strip())
-                        render_success_card("Notebook Renamed", f"Title updated to: '{new_title.strip()}'")
+                        d = km.start_daemon(notebook_id=nb["id"], auto_restore=True)
+                        render_success_card("Permanent Engine Armed!", f"Pod {nb['id']} is now guarded against the 30-minute reaper.")
                     except Exception as e:
-                        render_error_card("Rename Failed", str(e))
+                        render_error_card("Error", str(e))
 
-        elif "Delete Notebook" in choice:
-            confirm = questionary.confirm(f"Permanently delete '{title}'?", default=False, style=QUESTIONARY_STYLE).ask()
-            if confirm:
-                with console.status("[bold red]Deleting notebook...[/bold red]"):
+        elif "Pack Workspace" in choice:
+            nb = pick_notebook(client, "Select pod to pack:")
+            if nb:
+                with console.status("[bold cyan]Compressing /workspace into in-notebook vault...[/bold cyan]"):
                     try:
-                        client.delete_notebook(nb_id)
-                        render_success_card("Notebook Deleted", f"Notebook {nb_id} was removed.")
-                        break
+                        sess = SandboxSession(nb["id"], client=client)
+                        v = MoLabVault(sess)
+                        res = v.pack_workspace()
+                        render_success_card("Vault Packed!", f"Compressed {res.get('compressed_bytes', 0):,} bytes into /marimo/notebook.py metadata.")
                     except Exception as e:
-                        render_error_card("Delete Failed", str(e))
+                        render_error_card("Vault Error", str(e))
+
+        elif "Unpack Workspace" in choice:
+            nb = pick_notebook(client, "Select pod to unpack:")
+            if nb:
+                with console.status("[bold cyan]Extracting cloud vault into /workspace...[/bold cyan]"):
+                    try:
+                        sess = SandboxSession(nb["id"], client=client)
+                        v = MoLabVault(sess)
+                        res = v.unpack_workspace()
+                        render_success_card("Vault Restored!", "Files extracted successfully.")
+                    except Exception as e:
+                        render_error_card("Vault Error", str(e))
+
+        elif "Inspect" in choice:
+            nb = pick_notebook(client, "Select pod to inspect:")
+            if nb:
+                sess = SandboxSession(nb["id"], client=client)
+                v = MoLabVault(sess)
+                status = v.inspect_vault()
+                console.print(Panel(
+                    f"Vault Exists: {'[bold green]YES[/bold green]' if status['exists'] else '[dim]NO[/dim]'}\n"
+                    f"Size: {status.get('size_bytes', 0):,} bytes\n"
+                    f"Last Saved: {status.get('updated_at', 'Unknown')}",
+                    title="Vault Metadata",
+                    border_style="cyan",
+                ))
+
+        elif "View Keepalive Supervisor" in choice:
+            daemons = km.list_daemons()
+            if not daemons:
+                console.print("[dim]No active keepalive daemons.[/dim]")
+            else:
+                t = Table(title="Keepalive Supervisors", border_style="green")
+                t.add_column("Pod ID", style="bold white")
+                t.add_column("PID", style="cyan")
+                t.add_column("Heartbeats", style="green")
+                t.add_column("Status", style="bold green")
+                for d in daemons:
+                    t.add_row(d["notebook_id"], str(d["pid"]), str(d.get("heartbeat_count", 0)), d["status"])
+                console.print(t)
+
+        elif "Stop Keepalive" in choice:
+            nb = pick_notebook(client, "Select pod to stop daemon:")
+            if nb:
+                km.stop_daemon(nb["id"])
+                render_success_card("Stopped", "Keepalive daemon stopped.")
 
 
-def action_create_notebook(client: MoLabClient) -> None:
-    """1-click instant create notebook wizard."""
-    title = questionary.text(
-        "Enter notebook title:",
-        default=f"blackwell-workspace-{int(time.time()) % 1000}",
-        style=QUESTIONARY_STYLE,
-    ).ask()
-    if not title:
+def action_jobs_and_batches(client: MoLabClient) -> None:
+    """View and manage asynchronous SQLite background jobs."""
+    jm = JobManager()
+    while True:
+        jobs = jm.list_jobs(limit=15)
+        t = Table(title="Recent Background Compute Jobs (SQLite)", border_style="cyan", expand=True)
+        t.add_column("ID", style="dim", width=12)
+        t.add_column("Status", justify="center", width=12)
+        t.add_column("Job Name", style="bold white")
+        t.add_column("Command", style="cyan", ratio=2)
+        t.add_column("Pod", style="dim", width=14)
+
+        for j in jobs:
+            st = j["status"]
+            color = "green" if st == "COMPLETED" else "cyan" if st == "RUNNING" else "red" if st == "FAILED" else "dim"
+            t.add_row(j["id"][:10], f"[{color}]{st}[/{color}]", j.get("name") or "Unnamed", j["command"][:40], (j.get("notebook_id") or "")[:10])
+
+        console.print(t)
+
+        choices = [
+            "📜 View Trailing Logs for a Job",
+            "🛑 Cancel a Running Job",
+            "🚀 Submit Quick Background Command",
+            "⬅️ Back to Main Menu",
+        ]
+        act = questionary.select("Job Actions:", choices=choices, style=QUESTIONARY_STYLE).ask()
+        if not act or "Back" in act:
+            break
+
+        if "View Trailing Logs" in act:
+            job_choices = [questionary.Choice(title=f"{j['id'][:10]} - {j.get('name', 'Job')}", value=j["id"]) for j in jobs]
+            job_choices.append(questionary.Choice(title="⬅️ Cancel", value=None))
+            jid = questionary.select("Select job:", choices=job_choices, style=QUESTIONARY_STYLE).ask()
+            if jid:
+                logs = jm.get_job_logs(jid, lines=40)
+                console.print(Panel(logs or "No logs recorded.", title=f"Logs for {jid}", border_style="dim cyan"))
+                questionary.text("Press Enter to return...", style=QUESTIONARY_STYLE).ask()
+
+        elif "Cancel" in act:
+            running_jobs = [j for j in jobs if j["status"] == "RUNNING"]
+            if not running_jobs:
+                console.print("[dim]No running jobs to cancel.[/dim]")
+                continue
+            jid = questionary.select("Select job to cancel:", choices=[j["id"] for j in running_jobs], style=QUESTIONARY_STYLE).ask()
+            if jid:
+                jm.cancel_job(jid)
+                render_success_card("Cancelled", f"Job {jid} cancelled.")
+
+        elif "Submit Quick" in act:
+            nb = pick_notebook(client, "Select target pod:")
+            if nb:
+                cmd = questionary.text("Enter command to run in background:", style=QUESTIONARY_STYLE).ask()
+                if cmd:
+                    job = jm.submit_job(cmd, notebook_id=nb["id"], name="manual-tui-job")
+                    render_success_card("Job Submitted!", f"Job ID: {job['id']}\nTracking in SQLite.")
+
+
+def action_workloads(client: MoLabClient) -> None:
+    """Pre-configured AI Workload Launcher."""
+    reg = WorkloadRegistry()
+    workloads = reg.list_workloads()
+
+    choices = [
+        questionary.Choice(title=f"⚡ {w.name}: {w.description}", value=w)
+        for w in workloads
+    ]
+    choices.append(questionary.Choice(title="⬅️ Back", value=None))
+
+    selected = questionary.select("Select AI Workload to Launch:", choices=choices, style=QUESTIONARY_STYLE).ask()
+    if not selected:
         return
 
-    hw_choice = questionary.select(
-        "Select compute hardware:",
-        choices=[
-            "⚡ NVIDIA RTX PRO 6000 Blackwell (96 GB VRAM) [Recommended]",
-            "🖥️ CPU-only (4 vCPUs, 32 GB RAM)",
-        ],
-        style=QUESTIONARY_STYLE,
-    ).ask()
+    nb = pick_notebook(client, "Select target Blackwell pod:")
+    if not nb:
+        return
 
-    gpu = "rtxp6000" if "Blackwell" in hw_choice else ""
+    params = {}
+    for p_name, p_spec in selected.parameters.items():
+        desc = p_spec.get("description", p_name)
+        val = questionary.text(f"Parameter '{p_name}' ({desc}):", style=QUESTIONARY_STYLE).ask()
+        if val:
+            params[p_name] = val
 
-    with console.status("[bold green]Provisioning container pod on CoreWeave...[/bold green]"):
+    with console.status(f"[bold green]Submitting workload '{selected.name}'...[/bold green]"):
         try:
-            nb_id = client.create_notebook(title=title, gpu=gpu)
-            try:
-                client.rename_notebook(nb_id, title)
-            except Exception:
-                pass
-
-            render_success_card(
-                "Notebook Created Successfully!",
-                f"Notebook ID: [bold cyan]{nb_id}[/bold cyan]\n"
-                f"Hardware:    [bold #76b900]{'NVIDIA RTX PRO 6000 Blackwell (96GB)' if gpu else 'CPU'}[/bold #76b900]\n"
-                f"URL:         https://molab.marimo.io/notebooks/{nb_id}"
-            )
-
-            open_now = questionary.confirm("Would you like to open root bash shell now?", default=True, style=QUESTIONARY_STYLE).ask()
-            if open_now:
-                sess = SandboxSession(nb_id, client=client)
-                sess.interactive_shell()
+            cmd = selected.command_builder(params) if selected.command_builder else "echo 'No command'"
+            jm = JobManager()
+            job = jm.submit_job(cmd, notebook_id=nb["id"], name=selected.name)
+            render_success_card("Workload Running!", f"Launched {selected.name} on {nb['id']}.\nJob ID: {job['id']}")
         except Exception as e:
-            render_error_card("Creation Failed", str(e))
+            render_error_card("Workload Launch Failed", str(e))
+    questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
 
 
 def action_terminal_chat(notebook_id: str) -> None:
-    """Run interactive terminal chat with the deployed 27B model."""
+    """Interactive chat with deployed LLM."""
     session = SandboxSession(notebook_id)
+    history: List[Dict[str, str]] = []
+
     console.print(Panel(
-        "💬 [bold white]Gemma 3 27B IT Abliterated (Unrestricted BF16)[/bold white]\n"
-        "⚡ Hardware: [bold #76b900]NVIDIA RTX PRO 6000 Blackwell (95GB VRAM)[/bold #76b900]\n"
-        "💡 Type your prompt and press Enter. Type [bold red]exit[/bold red] or [bold red]/quit[/bold red] to end.",
-        title="[bold green]Interactive Terminal Chat[/bold green]",
+        "Chatting with deployed 27B model on NVIDIA Blackwell GPU.\nType 'exit' to return.",
+        title="[bold green]MoLab LLM Chat[/bold green]",
         border_style="green",
     ))
 
-    history: List[Dict[str, str]] = []
     while True:
-        try:
-            user_input = questionary.text("You >", style=QUESTIONARY_STYLE).ask()
-        except (KeyboardInterrupt, EOFError):
-            break
-
-        if not user_input or not user_input.strip():
-            continue
-        if user_input.strip().lower() in ("exit", "quit", "/exit", "/quit"):
-            console.print("[dim]Chat session closed.[/dim]")
+        user_input = questionary.text("You ❯", style=QUESTIONARY_STYLE).ask()
+        if not user_input or user_input.strip().lower() in ["exit", "quit", "q"]:
             break
 
         history.append({"role": "user", "content": user_input.strip()})
-        with console.status("[bold green]Blackwell GPU generating tokens...[/bold green]"):
+        with console.status("[bold green]Blackwell generating response...[/bold green]"):
             try:
                 res = session.chat_completion(history, max_tokens=512, temperature=0.7)
                 reply = res.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -360,40 +620,19 @@ def action_terminal_chat(notebook_id: str) -> None:
                 continue
 
         history.append({"role": "assistant", "content": reply})
-        console.print(Panel(
-            Markdown(reply),
-            title="[bold green]Gemma 3 27B (Blackwell)[/bold green]",
-            border_style="green",
-        ))
+        console.print(Panel(Markdown(reply), title="[bold green]Blackwell LLM[/bold green]", border_style="green"))
 
 
 def action_localhost_bridge(notebook_id: str) -> None:
     """Launch local HTTP proxy exposing localhost:8000/v1."""
     session = SandboxSession(notebook_id)
     port = 8000
-
-    panel_text = Text()
-    panel_text.append("🚀 Localhost Bridge Active!\n\n", style="bold green")
-    panel_text.append(" • Local OpenAI Base URL: ", style="dim")
-    panel_text.append(f"http://localhost:{port}/v1\n", style="bold cyan")
-    panel_text.append(" • Chat Completions:     ", style="dim")
-    panel_text.append(f"http://localhost:{port}/v1/chat/completions\n", style="cyan")
-    panel_text.append(" • Model Health Check:   ", style="dim")
-    panel_text.append(f"http://localhost:{port}/health\n", style="cyan")
-    panel_text.append(" • Deployed Model:       ", style="dim")
-    panel_text.append("gemma-3-27b-it-abliterated (Uncompressed BF16)\n", style="bold white")
-    panel_text.append(" • Cloud Hardware:       ", style="dim")
-    panel_text.append("NVIDIA RTX PRO 6000 Blackwell (95GB VRAM)\n\n", style="bold #76b900")
-    panel_text.append("You can now connect Open WebUI, SillyTavern, Python SDK, or curl directly to localhost:8000.\n", style="white")
-    panel_text.append("Press Ctrl+C in this terminal when you want to stop the bridge.", style="dim yellow")
-
     console.print(Panel(
-        panel_text,
-        title="[bold green]MoLab Localhost Bridge[/bold green]",
+        f"🚀 Localhost Bridge Active on [bold cyan]http://localhost:{port}/v1[/bold cyan]\n"
+        f"Forwarding to remote port 8000 on pod {notebook_id}.\nPress Ctrl+C to stop.",
+        title="[bold green]MoLab Port Forward Bridge[/bold green]",
         border_style="green",
-        padding=(1, 2),
     ))
-
     forwarder = LocalHttpForwarder(session, port=port)
     try:
         forwarder.start()
@@ -402,12 +641,11 @@ def action_localhost_bridge(notebook_id: str) -> None:
 
 
 def display_gpu_telemetry(notebook_id: str) -> None:
-    """Render GPU telemetry dashboard."""
+    """Render GPU and hardware telemetry."""
     session = SandboxSession(notebook_id)
     with console.status("[bold green]Querying NVIDIA Blackwell GPU telemetry...[/bold green]"):
         try:
             info = session.get_gpu_telemetry()
-            server_health = session.execute_command("curl -s http://127.0.0.1:8000/health", timeout=10.0)
         except Exception as e:
             render_error_card("Telemetry Error", str(e))
             return
@@ -423,22 +661,12 @@ def display_gpu_telemetry(notebook_id: str) -> None:
     table.add_row("GPU Device", str(info.get("device_name", "NVIDIA RTX PRO 6000 Blackwell")))
     table.add_row("Total VRAM", f"{info.get('total_vram_gb', 94.97)} GB GDDR7")
     table.add_row("Allocated VRAM", f"{info.get('allocated_vram_gb', 0.0)} GB")
-    table.add_row("Compute Capability", f"sm_{str(info.get('compute_capability', '12.0')).replace('.', '')} ({info.get('compute_capability', '12.0')})")
-    table.add_row("Multiprocessors (SM)", f"{info.get('sm_count', 188)} SMs")
     table.add_row("CUDA Runtime", str(info.get("cuda_version", "13.0")))
     table.add_row("PyTorch Version", str(info.get("torch_version", "2.11.0")))
     table.add_row("Host System RAM", f"{info.get('host_ram_gb', 160.0)} GiB RAM")
     table.add_row("Host CPU Cores", f"{info.get('cpu_cores', 20)} vCPUs")
 
     console.print(table)
-
-    if "allocated_gb" in server_health:
-        console.print(Panel(
-            f"[bold green]Live Model Server VRAM:[/bold green] {server_health}",
-            title="Model Server Status",
-            border_style="green",
-        ))
-
     questionary.text("Press Enter to return...", style=QUESTIONARY_STYLE).ask()
 
 
@@ -466,22 +694,22 @@ def action_file_transfer(client: MoLabClient) -> None:
         if not local_p or not os.path.exists(os.path.expanduser(local_p)):
             console.print("[red]Local file does not exist.[/red]")
             return
-        remote_p = questionary.text("Enter remote destination path (default: /marimo/<filename>):", style=QUESTIONARY_STYLE).ask()
+        remote_p = questionary.text("Enter remote destination path (default: /workspace/<filename>):", style=QUESTIONARY_STYLE).ask()
         with console.status("[bold cyan]Uploading file to cloud pod...[/bold cyan]"):
             try:
-                dest, sz = session.push_file(local_p, remote_p if remote_p.strip() else None)
+                dest, sz = session.push_file(local_p, remote_p if remote_p and remote_p.strip() else None)
                 render_success_card("Upload Complete", f"Uploaded {sz:,} bytes to: [bold white]{dest}[/bold white]")
             except Exception as e:
                 render_error_card("Upload Failed", str(e))
 
     elif choice and "Pull" in choice:
-        remote_p = questionary.text("Enter remote file path in pod (e.g. /marimo/app.py):", style=QUESTIONARY_STYLE).ask()
+        remote_p = questionary.text("Enter remote file path in pod (e.g. /workspace/output.mp4):", style=QUESTIONARY_STYLE).ask()
         if not remote_p:
             return
         local_p = questionary.text("Enter local destination path (default: current directory):", style=QUESTIONARY_STYLE).ask()
         with console.status("[bold cyan]Downloading file from cloud pod...[/bold cyan]"):
             try:
-                dest, sz = session.pull_file(remote_p, local_p if local_p.strip() else None)
+                dest, sz = session.pull_file(remote_p, local_p if local_p and local_p.strip() else None)
                 render_success_card("Download Complete", f"Downloaded {sz:,} bytes to: [bold white]{dest}[/bold white]")
             except Exception as e:
                 render_error_card("Download Failed", str(e))
@@ -496,7 +724,6 @@ def action_ai_studio(client: MoLabClient) -> None:
                 "💬 Terminal Chat with Deployed 27B Model (Instant Conversation)",
                 "🌐 Start Localhost Bridge (Expose http://localhost:8000/v1)",
                 "🩺 Check Model Health & VRAM Status",
-                "ℹ️ Model & Hardware Architecture Details",
                 "⬅️ Back to Main Menu",
             ],
             style=QUESTIONARY_STYLE,
@@ -505,7 +732,6 @@ def action_ai_studio(client: MoLabClient) -> None:
         if not choice or "Back" in choice:
             break
 
-        # Pick active notebook (defaults to any running Blackwell notebook)
         running = client.list_running_sandboxes()
         active_id = list(running.keys())[0] if running else None
         if not active_id:
@@ -527,17 +753,30 @@ def action_ai_studio(client: MoLabClient) -> None:
                 except Exception as e:
                     render_error_card("Model Health Error", str(e))
             questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
-        elif "Model & Hardware" in choice:
-            details = (
-                "• **Model**: `mlabonne/gemma-3-27b-it-abliterated` (27.2 Billion parameters)\n"
-                "• **Weights**: Pure uncompressed BF16 safetensors (53.65 GB disk footprint)\n"
-                "• **Safety**: Refusal vectors abliterated (unrestricted reasoning / zero refusals)\n"
-                "• **VRAM Usage**: 51.10 GB allocated / 94.97 GB total (43.87 GB free for KV cache)\n"
-                "• **Phone Storage**: **0 Bytes** (100% cloud container execution)\n"
-                "• **GPU**: NVIDIA RTX PRO 6000 Blackwell Server Edition (`sm_120`)\n"
-            )
-            console.print(Panel(Markdown(details), title="AI Model Architecture", border_style="cyan"))
-            questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
+
+
+def action_create_notebook(client: MoLabClient) -> None:
+    """Interactive notebook creation wizard."""
+    title = questionary.text("Enter notebook title:", default="Blackwell-Workspace", style=QUESTIONARY_STYLE).ask()
+    if not title:
+        return
+    hw = questionary.select(
+        "Select compute hardware:",
+        choices=[
+            "⚡ NVIDIA RTX PRO 6000 Blackwell (96GB VRAM)",
+            "🖥️ CPU instance (4 vCPU, 32GB RAM)",
+        ],
+        style=QUESTIONARY_STYLE,
+    ).ask()
+    gpu = "rtxp6000" if "Blackwell" in hw else "none"
+
+    with console.status("[bold green]Creating and provisioning notebook container...[/bold green]"):
+        try:
+            nb = client.create_notebook(title=title, gpu=gpu)
+            render_success_card("Notebook Created!", f"ID: {nb['id']}\nHardware: {hw}")
+        except Exception as e:
+            render_error_card("Creation Failed", str(e))
+    questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
 
 
 def action_account_settings() -> None:
@@ -572,25 +811,22 @@ def action_account_settings() -> None:
 
 
 def action_show_help() -> None:
-    """Display quick reference and cheatsheet."""
+    """Display quick reference cheatsheet."""
     guide = (
-        "### ⚡ MoLab CLI Cheat Sheet\n\n"
+        "### ⚡ MoLab CLI Cheat Sheet (v2.3.1)\n\n"
         "| Command | Description |\n"
         "|---|---|\n"
-        "| `molab` / `molabctl` | Launch this interactive Control Center dashboard |\n"
-        "| `molab list` | List all cloud notebooks and active running pods |\n"
-        "| `molab create [--blackwell]` | Provision a new sandbox pod (Blackwell 96GB GPU) |\n"
-        "| `molab shell <id>` | Open an interactive root bash terminal in the pod |\n"
-        "| `molab compute <id> --blackwell` | Switch notebook compute to NVIDIA Blackwell |\n"
-        "| `molab chat <id>` | Terminal chat with deployed 27B unrestricted model |\n"
-        "| `molab forward <id> [--port 8000]` | Bridge localhost:8000 to remote model server |\n"
-        "| `molab gpu <id>` | Display real-time Blackwell GPU telemetry and VRAM |\n"
-        "| `molab push <id> <local> <remote>` | Upload file or dataset directly into pod |\n"
-        "| `molab pull <id> <remote> <local>` | Download file from pod to local storage |\n"
-        "| `molab exec <id> '<cmd>'` | Execute a one-shot remote bash command |\n"
-        "| `molab install <id> <packages>` | Install Python packages inside remote pod |\n"
-        "| `molab stop <id>` | Stop/Shutdown a running container pod |\n"
-        "| `molab status` | Check authentication & Clerk session validity |\n"
+        "| `molab` / `molab ui` | Launch this interactive TUI Control Center dashboard |\n"
+        "| `molab web` / `molab dashboard` | Launch the browser-based Web Control Center |\n"
+        "| `molab free` | Audit Blackwell pods and recommend free idle pod |\n"
+        "| `molab gallery <list|search|download>` | Browse and clone 111+ community AI recipes |\n"
+        "| `molab vault <pack|unpack|inspect>` | 100% on-MoLab permanent storage vault (0 local bytes) |\n"
+        "| `molab permanent <id>` | 1-Click 24/7 infinite machine (defeats 30m idle reaper) |\n"
+        "| `molab job submit '<cmd>'` | Submit background job tracked in local SQLite |\n"
+        "| `molab env <id>` | Inspect remote container environment and gVisor kernel |\n"
+        "| `molab thumbnail <id>` | Generate visual Open Graph SVG preview |\n"
+        "| `molab forward <id>` | Bridge localhost:8000 to remote model server |\n"
+        "| `molab push/pull <id>` | High-speed native HTTP/2 streaming transfers |\n"
     )
     console.print(Panel(Markdown(guide), title="📖 Quick Reference & Documentation", border_style="cyan"))
     questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
@@ -609,15 +845,32 @@ def start_interactive_tui() -> None:
             running_pods = client.list_running_sandboxes()
             running_count = len(running_pods)
 
+            # Audit first free pod for status bar hint
+            free_pod_id = None
+            for nb_id in running_pods:
+                try:
+                    sess = SandboxSession(nb_id, client=client)
+                    wl = sess.get_workload_status()
+                    if not wl.get("is_occupied", False):
+                        free_pod_id = nb_id
+                        break
+                except Exception:
+                    pass
+
             render_banner()
-            render_status_bar(auth_info, running_pods_count=running_count)
+            render_status_bar(auth_info, running_pods_count=running_count, recommended_free_pod=free_pod_id)
 
             choices = [
                 "📋 Browse & Manage Notebooks",
                 "🚀 1-Click Launch Blackwell Pod",
-                "💻 Open Cloud Root Terminal (Shell)",
+                "🎨 MoLab Community Gallery (111+ Recipes)",
+                "🛡️ 100% On-MoLab Vault & Permanence",
+                "⚡ Background Jobs & Batch DAGs",
                 "🤖 AI Model Studio (Gemma 3 27B)",
-                "⚡ Real-time GPU Telemetry",
+                "🚀 Pre-Configured AI Workloads",
+                "📊 Real-time Hardware & GPU Telemetry",
+                "💻 Open Cloud Root Terminal (Shell)",
+                "🌐 Launch Web Control Center (Browser)",
                 "📂 Cloud File Transfer (Push / Pull)",
                 "📦 Python Package Manager",
                 "🔑 Account & Authentication",
@@ -639,17 +892,28 @@ def start_interactive_tui() -> None:
                 action_browse_notebooks(client)
             elif "1-Click Launch Blackwell Pod" in action:
                 action_create_notebook(client)
+            elif "Community Gallery" in action:
+                action_community_gallery(client)
+            elif "Vault & Permanence" in action:
+                action_vault_permanence(client)
+            elif "Background Jobs" in action:
+                action_jobs_and_batches(client)
+            elif "AI Model Studio" in action:
+                action_ai_studio(client)
+            elif "Pre-Configured AI Workloads" in action:
+                action_workloads(client)
+            elif "Real-time Hardware & GPU Telemetry" in action:
+                nb = pick_notebook(client, "Select pod for GPU telemetry:")
+                if nb:
+                    display_gpu_telemetry(nb["id"])
             elif "Open Cloud Root Terminal" in action:
                 nb = pick_notebook(client, "Select pod to open shell:")
                 if nb:
                     sess = SandboxSession(nb["id"], client=client)
                     sess.interactive_shell()
-            elif "AI Model Studio" in action:
-                action_ai_studio(client)
-            elif "Real-time GPU Telemetry" in action:
-                nb = pick_notebook(client, "Select pod for GPU telemetry:")
-                if nb:
-                    display_gpu_telemetry(nb["id"])
+            elif "Launch Web Control Center" in action:
+                from molab_cli.web import start_web_server
+                start_web_server(port=8080, open_browser=True)
             elif "Cloud File Transfer" in action:
                 action_file_transfer(client)
             elif "Python Package Manager" in action:

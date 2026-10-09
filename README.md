@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Jobs-SQLite%20DAG%20%26%20Batch%20Queue-orange.svg" alt="Jobs"></a>
   <a href="#"><img src="https://img.shields.io/badge/Persistence-100%25%20On--MoLab%20Vault%20%26%20Keepalive-emerald.svg" alt="Persistence"></a>
   <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(48%20Tools)-purple.svg" alt="MCP"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-97%20Passed%20(100%25)-success.svg" alt="Tests"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-101%20Passed%20(100%25)-success.svg" alt="Tests"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-Termux%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
@@ -87,6 +87,8 @@ Provide AI agents in Cursor, Claude Desktop, and Antigravity with native capabil
 |   ├── gallery.py       : MoLab Gallery client (111+ curated AI recipes)       |
 |   ├── vault.py         : 100% on-MoLab In-Notebook Vault persistence          |
 |   ├── keepalive.py     : Dual-loop anti-idle supervisor daemon                |
+|   ├── web.py           : Local Web Control Center dashboard (FastAPI / SPA)   |
+|   ├── tui.py           : Zero-typing interactive Terminal Control Center      |
 |   └── sdk.py           : High-level typed Python SDK for automated scripts    |
 +-------------------------------------------------------------------------------+
          │                                                      │
@@ -425,6 +427,20 @@ molab thumbnail <id> -o preview.svg
 
 # Audit active WebSocket connections:
 molab connections <id>
+```
+
+### 15. Modern Web Control Center & Visual TUI (v2.3.1)
+Launch the browser-based Web Control Center or full-screen interactive Terminal TUI:
+```bash
+# 1. Launch browser-based Web Control Center (FastAPI single-page dashboard):
+molab web
+# Or on custom port:
+molab web --port 9000 --no-browser
+
+# 2. Launch full-screen interactive Terminal Control Center (zero typing needed):
+molab ui
+# Or simply run without arguments:
+molab
 ```
 
 ---

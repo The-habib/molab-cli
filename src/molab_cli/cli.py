@@ -55,7 +55,7 @@ def reconstruct_script(nb_id: str, title: str, cells: list) -> str:
 
 
 @click.group(invoke_without_command=True)
-@click.version_option(version="1.0.0", prog_name="molab")
+@click.version_option(version="2.3.1", prog_name="molab")
 @click.pass_context
 def cli(ctx):
     """molab: Modern interactive CLI & cloud orchestrator for MoLab with NVIDIA Blackwell GPU support."""
@@ -69,6 +69,24 @@ def cmd_ui():
     """Launch the interactive visual TUI Control Center dashboard."""
     from molab_cli.tui import start_interactive_tui
     start_interactive_tui()
+
+
+@cli.command("web")
+@click.option("-p", "--port", default=8080, help="Port to bind web server (default: 8080)")
+@click.option("--no-browser", is_flag=True, help="Do not open browser automatically")
+def cmd_web(port: int, no_browser: bool):
+    """Launch the modern browser-based Web Control Center dashboard."""
+    from molab_cli.web import start_web_server
+    start_web_server(port=port, open_browser=not no_browser)
+
+
+@cli.command("dashboard")
+@click.option("-p", "--port", default=8080, help="Port to bind web server (default: 8080)")
+@click.option("--no-browser", is_flag=True, help="Do not open browser automatically")
+def cmd_dashboard(port: int, no_browser: bool):
+    """Alias for 'molab web' — launch the modern browser-based Web Control Center."""
+    from molab_cli.web import start_web_server
+    start_web_server(port=port, open_browser=not no_browser)
 
 
 @cli.command("login")

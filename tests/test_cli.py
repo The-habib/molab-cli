@@ -12,7 +12,7 @@ def test_cli_version():
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
     assert "molab" in result.output
-    assert "1.0.0" in result.output
+    assert "2.3.1" in result.output
 
 
 def test_cli_help():
@@ -30,7 +30,7 @@ def test_cli_help():
 
 def test_cli_subcommand_helps():
     runner = CliRunner()
-    for sub in ["list", "create", "compute", "shell", "exec", "gpu", "chat", "forward", "push", "pull", "install", "stop", "clone", "rename", "delete", "status", "login", "ui", "free"]:
+    for sub in ["list", "create", "compute", "shell", "exec", "gpu", "chat", "forward", "push", "pull", "install", "stop", "clone", "rename", "delete", "status", "login", "ui", "web", "dashboard", "free"]:
         result = runner.invoke(cli, [sub, "--help"])
         assert result.exit_code == 0, f"Command {sub} --help failed: {result.output}"
 

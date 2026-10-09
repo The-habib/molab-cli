@@ -22,6 +22,7 @@ COLOR_WARNING = "#F59E0B"     # Amber
 COLOR_DANGER = "#EF4444"      # Crimson Rose
 COLOR_MUTED = "#64748B"       # Slate Gray
 COLOR_CARD = "#1E293B"        # Midnight Blue
+COLOR_VIOLET = "#8B5CF6"      # Neural Purple
 
 # Questionary modern prompt style
 QUESTIONARY_STYLE = Style([
@@ -30,14 +31,14 @@ QUESTIONARY_STYLE = Style([
     ("answer", "fg:#22c55e bold"),          # Green answer
     ("pointer", "fg:#06b6d4 bold"),         # Cyan pointer '❯'
     ("highlighted", "fg:#06b6d4 bold"),     # Cyan highlighted choice
-    ("selected", "fg:#22c55e"),             # Green selected checkbox
+    ("selected", "fg:#22c55e bold"),        # Green selected checkbox
     ("separator", "fg:#475569"),            # Dim separator
-    ("instruction", "fg:#64748b italic"),   # Muted instructions
+    ("instruction", "fg:#94a3b8 italic"),   # Muted instructions
     ("text", "fg:#f8fafc"),                 # Normal text
     ("disabled", "fg:#475569 italic"),
 ])
 
-# ASCII Banner
+# Modernized ASCII Banner
 BANNER_ASCII = r"""
  ███╗   ███╗ ██████╗ ██╗      █████╗ ██████╗ 
  ████╗ ████║██╔═══██╗██║     ██╔══██╗██╔══██╗
@@ -48,10 +49,10 @@ BANNER_ASCII = r"""
 """
 
 
-def render_banner(subtitle: str = "Cloud Notebooks & NVIDIA Blackwell Server Hub") -> None:
+def render_banner(subtitle: str = "Cloud GPU Orchestration & Blackwell AI Hub") -> None:
     """Print the stylized MoLab header banner."""
     title_text = Text(BANNER_ASCII, style="bold cyan")
-    sub_text = Text(f"\n   ⚡ {subtitle}  •  v1.0.0", style="dim cyan")
+    sub_text = Text(f"\n   ⚡ {subtitle}  •  v2.3.1\n   🚀 NVIDIA RTX PRO 6000 (96GB VRAM)  •  CoreWeave Fabric", style="bold #76b900")
     content = Text.assemble(title_text, sub_text)
     console.print(Panel(
         content,
@@ -64,9 +65,10 @@ def render_status_bar(
     auth_info: Dict[str, Any],
     running_pods_count: int = 0,
     running_count: Optional[int] = None,
+    recommended_free_pod: Optional[str] = None,
     **kwargs: Any,
 ) -> None:
-    """Render a modern compact status bar showing account and pod status."""
+    """Render a modern compact status bar showing account, pod status, and recommended free pod."""
     if running_count is not None:
         running_pods_count = running_count
     is_auth = auth_info.get("authenticated", False)
@@ -83,13 +85,13 @@ def render_status_bar(
         else "[bold red]○ Unauthenticated[/bold red]"
     )
 
-    pods_pill = (
-        f"[bold bright_green]⚡ {running_pods_count} Pod Running[/bold bright_green] [dim](Blackwell 96GB)[/dim]"
-        if running_pods_count > 0
-        else "[dim]0 Pods Running[/dim]"
-    )
+    if running_pods_count > 0:
+        free_hint = f" [bold green](★ Free: {recommended_free_pod[:12]}...)[/bold green]" if recommended_free_pod else ""
+        pods_pill = f"[bold bright_green]⚡ {running_pods_count} Pod Active[/bold bright_green]{free_hint}"
+    else:
+        pods_pill = "[dim]0 Pods Running[/dim]"
 
-    hw_pill = "[bold #76b900]NVIDIA RTX PRO 6000[/bold #76b900] [dim](sm_120)[/dim]"
+    hw_pill = "[bold #76b900]Blackwell 96GB GDDR7[/bold #76b900] [dim](sm_120)[/dim]"
 
     grid.add_row(auth_pill, pods_pill, hw_pill)
     console.print(Panel(grid, border_style="dim cyan", padding=(0, 1)))

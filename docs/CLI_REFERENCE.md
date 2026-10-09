@@ -690,3 +690,43 @@ Browse, search, inspect, and download 111+ curated AI templates, interactive not
   # Download template script:
   molab gallery download "stable-diffusion-3" ./sd3_pipeline.py
   ```
+
+---
+
+## 17. Interactive Dashboards & Control Centers (v2.3.1)
+
+### `molab ui`
+Launch the full-screen interactive Terminal Control Center dashboard with zero typing needed.
+* **Features:**
+  * Smart occupied vs free pod audit badges (`★ FREE / IDLE` vs `⚠️ OCCUPIED`).
+  * MoLab Community Gallery browser (111+ neural recipes).
+  * 100% on-MoLab Vault manager (pack, unpack, make permanent).
+  * SQLite background jobs and batch DAG monitor with live log tailing.
+  * Remote container diagnostics and SVG thumbnail generator.
+  * AI Model Studio (chat with deployed 27B model on Blackwell).
+* **Example:**
+  ```bash
+  molab ui
+  # Or simply:
+  molab
+  ```
+
+### `molab web [OPTIONS]` / `molab dashboard [OPTIONS]`
+Launch the modern browser-based Web Control Center dashboard.
+* **Options:**
+  * `-p, --port <int>`: Port to bind web server (default: 8080).
+  * `--no-browser`: Do not automatically open browser on launch.
+* **Features:**
+  * Real-time dark-mode OLED responsive web interface.
+  * Live Blackwell VRAM allocation gauges and container telemetry.
+  * 1-Click Vault pack/unpack and 24/7 infinite permanence arming.
+  * Interactive MoLab Community Gallery card grid with live search.
+  * Real-time background job monitor with modal log viewer.
+* **Example:**
+  ```bash
+  # Launch web dashboard and open browser automatically:
+  molab web
+
+  # Run on custom port without opening browser:
+  molab web --port 9000 --no-browser
+  ```
