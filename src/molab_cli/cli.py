@@ -2,6 +2,7 @@
 Rich CLI interface for molabctl.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -95,10 +96,15 @@ def cmd_login(client_cookie: Optional[str]):
 
 
 @cli.command("status")
-def cmd_status():
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output session status as JSON")
+def cmd_status(as_json: bool):
     """Display current authentication and workspace connection details."""
     from molab_cli.theme import render_error_card
     status = inspect_auth_status()
+    if as_json:
+        print(json.dumps(status, indent=2))
+        return
+
     if status.get("authenticated"):
         table = Table(title="[bold cyan]MoLab Cloud Session[/bold cyan]", box=box.ROUNDED)
         table.add_column("Property", style="cyan", no_wrap=True)
@@ -122,15 +128,27 @@ def cmd_status():
 
 
 @cli.command("list")
-def cmd_list():
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output notebooks list as JSON")
+def cmd_list(as_json: bool):
     """List all cloud notebooks in your workspace."""
     client = MoLabClient()
-    with console.status("[bold blue]Fetching cloud notebooks from molab.marimo.io...[/bold blue]"):
+    if not as_json:
+        with console.status("[bold blue]Fetching cloud notebooks from molab.marimo.io...[/bold blue]"):
+            try:
+                notebooks = client.list_notebooks()
+            except Exception as e:
+                console.print(f"[red]Error fetching notebooks:[/red] {e}")
+                return
+    else:
         try:
             notebooks = client.list_notebooks()
         except Exception as e:
-            console.print(f"[red]Error fetching notebooks:[/red] {e}")
+            print(json.dumps({"error": str(e)}))
             return
+
+    if as_json:
+        print(json.dumps(notebooks, indent=2))
+        return
 
     if not notebooks:
         console.print("[yellow]No notebooks found in your workspace.[/yellow]")
@@ -228,18 +246,31 @@ def cmd_compute(notebook_id: str, use_blackwell: bool, cpu: int, memory: int):
 
 @cli.command("inspect")
 @click.argument("notebook_id")
-def cmd_inspect(notebook_id: str):
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output inspection as JSON")
+def cmd_inspect(notebook_id: str, as_json: bool):
     """Inspect notebook configuration, sandbox pod status, and hardware specs."""
     client = MoLabClient()
     session = SandboxSession(notebook_id, client=client)
 
-    with console.status("[bold blue]Connecting to MoLab pod...[/bold blue]"):
+    if not as_json:
+        with console.status("[bold blue]Connecting to MoLab pod...[/bold blue]"):
+            try:
+                info = client.inspect_notebook(notebook_id)
+                health = session.check_health()
+            except Exception as e:
+                console.print(f"[red]Error inspecting notebook:[/red] {e}")
+                return
+    else:
         try:
             info = client.inspect_notebook(notebook_id)
             health = session.check_health()
         except Exception as e:
-            console.print(f"[red]Error inspecting notebook:[/red] {e}")
+            print(json.dumps({"error": str(e)}))
             return
+
+    if as_json:
+        print(json.dumps({"notebook": info, "health": health}, indent=2))
+        return
 
     table = Table(title=f"Notebook: {info['title']} ({notebook_id})", box=box.ROUNDED)
     table.add_column("Property", style="cyan")
@@ -374,16 +405,39 @@ def cmd_clone(notebook_id: str):
 
 
 @cli.command("ps")
-def cmd_ps():
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output active pods as JSON")
+def cmd_ps(as_json: bool):
     """List actively running cloud sandbox pods."""
     client = MoLabClient()
-    with console.status("[bold blue]Querying running CoreWeave sandbox pods...[/bold blue]"):
+    if not as_json:
+        with console.status("[bold blue]Querying running CoreWeave sandbox pods...[/bold blue]"):
+            try:
+                running_map = client.list_running_sandboxes()
+                notebooks = {nb["id"]: nb for nb in client.list_notebooks()}
+            except Exception as e:
+                console.print(f"[red]Error:[/red] {e}")
+                return
+    else:
         try:
             running_map = client.list_running_sandboxes()
             notebooks = {nb["id"]: nb for nb in client.list_notebooks()}
         except Exception as e:
-            console.print(f"[red]Error:[/red] {e}")
+            print(json.dumps({"error": str(e)}))
             return
+
+    if as_json:
+        pods_list = [
+            {
+                "notebook_id": nb_id,
+                "sandbox_id": sb_id,
+                "title": notebooks.get(nb_id, {}).get("title", "Unknown"),
+                "gpu": notebooks.get(nb_id, {}).get("gpu", ""),
+                "is_blackwell": notebooks.get(nb_id, {}).get("gpu") == "rtxp6000",
+            }
+            for nb_id, sb_id in running_map.items()
+        ]
+        print(json.dumps(pods_list, indent=2))
+        return
 
     if not running_map:
         console.print("[yellow]No active sandbox pods running.[/yellow]")
@@ -402,6 +456,99 @@ def cmd_ps():
         table.add_row(nb_id, sb_id, title, hw)
 
     console.print(table)
+
+
+@cli.command("free")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output free pod audit as JSON")
+def cmd_free(as_json: bool):
+    """Find and identify free/idle Blackwell GPU pods without disturbing occupied pods."""
+    client = MoLabClient()
+    if not as_json:
+        with console.status("[bold blue]Scanning active Blackwell GPU pods...[/bold blue]"):
+            try:
+                running_map = client.list_running_sandboxes()
+                notebooks = {nb["id"]: nb for nb in client.list_notebooks()}
+            except Exception as e:
+                console.print(f"[red]Error scanning pods:[/red] {e}")
+                return
+    else:
+        try:
+            running_map = client.list_running_sandboxes()
+            notebooks = {nb["id"]: nb for nb in client.list_notebooks()}
+        except Exception as e:
+            print(json.dumps({"error": str(e)}))
+            return
+
+    blackwell_running = [nb_id for nb_id in running_map if notebooks.get(nb_id, {}).get("gpu") == "rtxp6000"]
+
+    if not blackwell_running:
+        msg = {"error": "No running Blackwell GPU pods found.", "running_pods": list(running_map.keys())}
+        if as_json:
+            print(json.dumps(msg))
+        else:
+            console.print("[yellow]No running Blackwell GPU pods found.[/yellow]")
+            console.print("[dim]Use 'molab create' or 'molab compute <id> --blackwell' to launch one.[/dim]")
+        return
+
+    pod_reports = []
+    recommended_free_id = None
+
+    for nb_id in blackwell_running:
+        nb_title = notebooks.get(nb_id, {}).get("title", "Untitled")
+        try:
+            session = SandboxSession(nb_id, client=client)
+            status = session.get_workload_status()
+            status["title"] = nb_title
+            pod_reports.append(status)
+            if not status["is_occupied"] and recommended_free_id is None:
+                recommended_free_id = nb_id
+        except Exception as err:
+            pod_reports.append({
+                "notebook_id": nb_id,
+                "title": nb_title,
+                "error": str(err),
+                "is_occupied": True,
+                "status": "UNREACHABLE"
+            })
+
+    if not recommended_free_id:
+        valid_pods = [p for p in pod_reports if "free_vram_gb" in p]
+        if valid_pods:
+            valid_pods.sort(key=lambda x: x.get("free_vram_gb", 0), reverse=True)
+            recommended_free_id = valid_pods[0]["notebook_id"]
+
+    result_data = {
+        "recommended_free_pod": recommended_free_id,
+        "total_blackwell_running": len(blackwell_running),
+        "pods": pod_reports,
+    }
+
+    if as_json:
+        print(json.dumps(result_data, indent=2))
+        return
+
+    table = Table(title="Blackwell GPU Pod Workload Audit", box=box.ROUNDED)
+    table.add_column("Notebook ID", style="bold cyan", no_wrap=True)
+    table.add_column("Title", style="white")
+    table.add_column("VRAM (Alloc/Free)", style="magenta")
+    table.add_column("Status", style="bold")
+    table.add_column("Recommendation", style="bold yellow")
+
+    for p in pod_reports:
+        nb_id = p["notebook_id"]
+        title = p.get("title", "Unknown")
+        if "error" in p:
+            table.add_row(nb_id, title, "N/A", "[red]UNREACHABLE[/red]", "[dim]Skip[/dim]")
+            continue
+
+        vram = f"{p['allocated_vram_gb']}G / {p['free_vram_gb']}G"
+        st = "[red]OCCUPIED[/red]" if p["is_occupied"] else "[bold green]FREE / IDLE[/bold green]"
+        rec = "[bold green]★ RECOMMENDED[/bold green]" if nb_id == recommended_free_id else "[dim]In-Use / Occupied[/dim]"
+        table.add_row(nb_id, title, vram, st, rec)
+
+    console.print(table)
+    if recommended_free_id:
+        console.print(f"\n[bold green]✔ Recommended free pod for heavy compute:[/bold green] [bold cyan]{recommended_free_id}[/bold cyan]")
 
 
 @cli.command("stop")
@@ -440,12 +587,13 @@ def cmd_delete(notebook_id: str, yes: bool):
 @click.argument("notebook_id")
 @click.argument("local_file", type=click.Path(exists=True))
 @click.argument("remote_path", required=False)
-def cmd_push(notebook_id: str, local_file: str, remote_path: Optional[str]):
+@click.option("-r", "--recursive", is_flag=True, help="Transfer directory recursively")
+def cmd_push(notebook_id: str, local_file: str, remote_path: Optional[str], recursive: bool):
     """Upload a local file or dataset directly into the CoreWeave container."""
     session = SandboxSession(notebook_id)
     with console.status(f"[bold cyan]Uploading {local_file} to pod...[/bold cyan]"):
         try:
-            dest, size = session.push_file(local_file, remote_path)
+            dest, size = session.push_file(local_file, remote_path, recursive=recursive)
             console.print(f"[green]✔ Uploaded [bold]{local_file}[/bold] -> [bold]{dest}[/bold] ({size} bytes)[/green]")
         except Exception as e:
             console.print(f"[red]Upload failed:[/red] {e}")
@@ -455,12 +603,13 @@ def cmd_push(notebook_id: str, local_file: str, remote_path: Optional[str]):
 @click.argument("notebook_id")
 @click.argument("remote_path")
 @click.argument("local_file", required=False)
-def cmd_pull(notebook_id: str, remote_path: str, local_file: Optional[str]):
+@click.option("-r", "--recursive", is_flag=True, help="Transfer directory recursively")
+def cmd_pull(notebook_id: str, remote_path: str, local_file: Optional[str], recursive: bool):
     """Download a file from the CoreWeave container to local storage."""
     session = SandboxSession(notebook_id)
     with console.status(f"[bold cyan]Downloading {remote_path} from pod...[/bold cyan]"):
         try:
-            dest, size = session.pull_file(remote_path, local_file)
+            dest, size = session.pull_file(remote_path, local_file, recursive=recursive)
             console.print(f"[green]✔ Downloaded [bold]{remote_path}[/bold] -> [bold]{dest}[/bold] ({size} bytes)[/green]")
         except Exception as e:
             console.print(f"[red]Download failed:[/red] {e}")
@@ -468,14 +617,24 @@ def cmd_pull(notebook_id: str, remote_path: str, local_file: Optional[str]):
 
 @cli.command("gpu")
 @click.argument("notebook_id")
-def cmd_gpu(notebook_id: str):
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output GPU telemetry as JSON")
+def cmd_gpu(notebook_id: str, as_json: bool):
     """Display real-time NVIDIA Blackwell GPU telemetry and VRAM utilization."""
     session = SandboxSession(notebook_id)
-    with console.status("[bold green]Querying NVIDIA Blackwell GPU telemetry...[/bold green]"):
+    if not as_json:
+        with console.status("[bold green]Querying NVIDIA Blackwell GPU telemetry...[/bold green]"):
+            try:
+                telemetry = session.get_gpu_telemetry()
+            except Exception as e:
+                console.print(f"[red]Failed to query GPU telemetry:[/red] {e}")
+                return
+    else:
         try:
             telemetry = session.get_gpu_telemetry()
+            print(json.dumps(telemetry, indent=2))
+            return
         except Exception as e:
-            console.print(f"[red]Failed to query GPU telemetry:[/red] {e}")
+            print(json.dumps({"error": str(e)}))
             return
 
     if not telemetry.get("cuda_available"):

@@ -30,9 +30,24 @@ def test_cli_help():
 
 def test_cli_subcommand_helps():
     runner = CliRunner()
-    for sub in ["list", "create", "compute", "shell", "exec", "gpu", "chat", "forward", "push", "pull", "install", "stop", "clone", "rename", "delete", "status", "login", "ui"]:
+    for sub in ["list", "create", "compute", "shell", "exec", "gpu", "chat", "forward", "push", "pull", "install", "stop", "clone", "rename", "delete", "status", "login", "ui", "free"]:
         result = runner.invoke(cli, [sub, "--help"])
         assert result.exit_code == 0, f"Command {sub} --help failed: {result.output}"
+
+
+def test_cli_json_flags():
+    from unittest.mock import patch
+    runner = CliRunner()
+    
+    with patch("molab_cli.cli.inspect_auth_status", return_value={"authenticated": True, "user_email": "test@marimo.io"}):
+        res = runner.invoke(cli, ["status", "--json"])
+        assert res.exit_code == 0
+        assert '"authenticated": true' in res.output
+
+    with patch("molab_cli.client.MoLabClient.list_notebooks", return_value=[{"id": "nb_1", "title": "Test", "gpu": "rtxp6000", "running": True}]):
+        res = runner.invoke(cli, ["list", "--json"])
+        assert res.exit_code == 0
+        assert '"nb_1"' in res.output
 
 
 def test_theme_render_status_bar():

@@ -244,15 +244,55 @@ class SandboxSession:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                 print("\n[Disconnected from MoLab Cloud Pod]")
 
-    def push_file(self, local_path: str, remote_path: Optional[str] = None) -> Tuple[str, int]:
+    def push_file(self, local_path: str, remote_path: Optional[str] = None, recursive: bool = False) -> Tuple[str, int]:
         """
-        Transfer a local file directly into the CoreWeave sandbox container using the native Marimo HTTP upload API.
+        Transfer a local file or directory directly into the CoreWeave sandbox container using the native Marimo HTTP upload API.
         """
         p = os.path.abspath(os.path.expanduser(local_path))
         if not os.path.exists(p):
             raise FileNotFoundError(f"Local file does not exist: {local_path}")
 
         self.resolve()
+
+        # Handle directory push via tarball streaming
+        if os.path.isdir(p) or recursive:
+            filename = os.path.basename(p.rstrip("/"))
+            dest_dir = remote_path or f"/workspace/{filename}"
+            self.execute_command(f"mkdir -p {dest_dir}")
+
+            scratch_dir = "/data/data/com.termux/files/home/.gemini/antigravity-cli/brain"
+            os.makedirs(scratch_dir, exist_ok=True)
+            tar_name = f"_up_{uuid.uuid4().hex[:8]}.tar.gz"
+            temp_tar = os.path.join(scratch_dir, tar_name)
+            try:
+                subprocess.run(
+                    ["tar", "-czf", temp_tar, "-C", os.path.dirname(p), filename],
+                    check=True, capture_output=True
+                )
+                tar_size = os.path.getsize(temp_tar)
+
+                # Upload tarball to pod /tmp
+                upload_url = f"{self.base_url}/api/files/create?token={self.auth_token}"
+                curl_cmd = [
+                    "curl", "-s", "-f", "-X", "POST",
+                    upload_url,
+                    "-F", "path=/tmp",
+                    "-F", "type=file",
+                    "-F", f"name={tar_name}",
+                    "-F", f"file=@{temp_tar}"
+                ]
+                res = subprocess.run(curl_cmd, capture_output=True, text=True)
+                if res.returncode != 0:
+                    raise RuntimeError(f"HTTP upload of directory tarball failed: {res.stderr}")
+
+                # Extract on pod and cleanup remote tarball
+                self.execute_command(f"tar -xzf /tmp/{tar_name} -C $(dirname {dest_dir}) && rm -f /tmp/{tar_name}")
+                return dest_dir, tar_size
+            finally:
+                if os.path.exists(temp_tar):
+                    os.remove(temp_tar)
+
+        # Handle single file push
         filename = os.path.basename(p)
         if remote_path and (remote_path.endswith("/") or self.execute_command(f"[ -d {remote_path} ] && echo 1 || echo 0").strip() == "1"):
             dest_dir = remote_path.rstrip("/")
@@ -284,13 +324,39 @@ class SandboxSession:
 
         return dest, file_size
 
-    def pull_file(self, remote_path: str, local_path: Optional[str] = None) -> Tuple[str, int]:
+    def pull_file(self, remote_path: str, local_path: Optional[str] = None, recursive: bool = False) -> Tuple[str, int]:
         """
-        Download a file from the CoreWeave sandbox container using the native Marimo HTTP download API.
+        Download a file or directory from the CoreWeave sandbox container using the native Marimo HTTP download API.
         """
         self.resolve()
-        dest = local_path or os.path.basename(remote_path)
+        dest = local_path or os.path.basename(remote_path.rstrip("/"))
         dest_p = os.path.abspath(os.path.expanduser(dest))
+
+        # Check if remote path is a directory
+        is_remote_dir = recursive or self.execute_command(f"[ -d {remote_path} ] && echo 1 || echo 0").strip() == "1"
+        if is_remote_dir:
+            scratch_dir = "/data/data/com.termux/files/home/.gemini/antigravity-cli/brain"
+            os.makedirs(scratch_dir, exist_ok=True)
+            tar_name = f"_dl_{uuid.uuid4().hex[:8]}.tar.gz"
+            parent_dir = self.execute_command(f"dirname {remote_path}").strip()
+            base_name = self.execute_command(f"basename {remote_path}").strip()
+            self.execute_command(f"tar -czf /tmp/{tar_name} -C {parent_dir} {base_name}")
+
+            temp_local_tar = os.path.join(scratch_dir, tar_name)
+            try:
+                download_url = f"{self.base_url}/api/files/download?path=/tmp/{tar_name}&token={self.auth_token}"
+                subprocess.run(["curl", "-s", "-f", "-L", "-o", temp_local_tar, download_url], check=True)
+
+                os.makedirs(dest_p, exist_ok=True)
+                extract_target = os.path.dirname(dest_p) if not os.path.isdir(dest_p) else dest_p
+                subprocess.run(["tar", "-xzf", temp_local_tar, "-C", extract_target], check=True)
+                size = os.path.getsize(temp_local_tar)
+                self.execute_command(f"rm -f /tmp/{tar_name}")
+                return dest_p, size
+            finally:
+                if os.path.exists(temp_local_tar):
+                    os.remove(temp_local_tar)
+
         if os.path.isdir(dest_p):
             dest_p = os.path.join(dest_p, os.path.basename(remote_path))
 
@@ -307,6 +373,50 @@ class SandboxSession:
             raise RuntimeError(f"HTTP download failed (code {res.returncode}): {res.stderr}")
 
         return dest_p, os.path.getsize(dest_p)
+
+    def get_workload_status(self) -> Dict[str, Any]:
+        """
+        Query real-time workload status, VRAM allocation, and detect running background services.
+        Useful for distinguishing free/idle pods from occupied pods.
+        """
+        telemetry = self.get_gpu_telemetry()
+        ps_out = self.execute_command("ps aux --sort=-%mem | grep -v 'marimo\\|grep\\|ps aux' | head -n 15")
+
+        has_server = False
+        active_workloads = []
+        for line in ps_out.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) >= 11:
+                cmd = " ".join(parts[10:])
+                if any(x in cmd for x in ["server.py", "vllm", "uvicorn", "train", "python -m"]):
+                    has_server = True
+                    active_workloads.append({
+                        "user": parts[0],
+                        "pid": parts[1],
+                        "cpu": parts[2],
+                        "mem": parts[3],
+                        "command": cmd[:80]
+                    })
+
+        allocated_vram = telemetry.get("allocated_vram_gb", 0)
+        total_vram = telemetry.get("total_vram_gb", 96.0)
+        free_vram = telemetry.get("free_vram_gb", total_vram - allocated_vram)
+        is_occupied = has_server or (allocated_vram > 20.0)
+
+        return {
+            "notebook_id": self.notebook_id,
+            "sandbox_id": self.sandbox_id,
+            "cuda_available": telemetry.get("cuda_available", False),
+            "device_name": telemetry.get("device_name", "N/A"),
+            "total_vram_gb": total_vram,
+            "allocated_vram_gb": allocated_vram,
+            "free_vram_gb": free_vram,
+            "is_occupied": is_occupied,
+            "status": "OCCUPIED" if is_occupied else "FREE / IDLE",
+            "active_workloads": active_workloads,
+        }
 
     def get_gpu_telemetry(self) -> Dict[str, Any]:
         """
@@ -444,11 +554,25 @@ class LocalHttpForwarder:
             def do_POST(self):
                 content_len = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_len) if content_len > 0 else b""
-                b64_body = base64.b64encode(body).decode("utf-8")
                 auth = self.headers.get("Authorization", "")
                 auth_hdr = f"-H 'Authorization: {auth}' " if auth else ""
-                cmd = f"echo '{b64_body}' | base64 -d | curl -s -X POST http://127.0.0.1:8000{self.path} {auth_hdr}-H 'Content-Type: application/json' --data-binary @-"
-                raw = session.execute_command(cmd, timeout=120.0)
+
+                if len(body) > 3000:
+                    req_name = f"_req_{uuid.uuid4().hex[:8]}.json"
+                    upload_url = f"{session.base_url}/api/files/create?token={session.auth_token}"
+                    subprocess.run(
+                        ["curl", "-s", "-f", "-X", "POST", upload_url,
+                         "-F", "path=/tmp", "-F", "type=file", "-F", f"name={req_name}",
+                         "-F", "file=@-"],
+                        input=body, check=True
+                    )
+                    cmd = f"curl -s -X POST http://127.0.0.1:8000{self.path} {auth_hdr}-H 'Content-Type: application/json' --data-binary @/tmp/{req_name} ; rm -f /tmp/{req_name}"
+                    raw = session.execute_command(cmd, timeout=180.0)
+                else:
+                    b64_body = base64.b64encode(body).decode("utf-8")
+                    cmd = f"echo '{b64_body}' | base64 -d | curl -s -X POST http://127.0.0.1:8000{self.path} {auth_hdr}-H 'Content-Type: application/json' --data-binary @-"
+                    raw = session.execute_command(cmd, timeout=120.0)
+
                 self._send_response(raw)
 
             protocol_version = "HTTP/1.1"
