@@ -22,6 +22,7 @@ from molab_cli.services import ServiceManager
 from molab_cli.snapshots import SnapshotManager
 from molab_cli.storage import StorageBridge
 from molab_cli.transfer import TransferManager
+from molab_cli.vault import MoLabVault
 from molab_cli.workloads import WorkloadRegistry
 
 
@@ -503,6 +504,55 @@ class MoLabMCPServer:
                     "required": ["notebook_id", "repo_id"],
                 },
             },
+            {
+                "name": "molab_make_permanent",
+                "description": "Transform a Blackwell GPU pod into an infinite permanent machine (prevents idle reaper, acquires wake-lock, starts in-pod guard, and packs vault 100% on MoLab).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "interval": {"type": "integer", "description": "Heartbeat interval in seconds (default: 120)"},
+                        "auto_pack": {"type": "boolean", "description": "Whether to auto-pack workspace into in-notebook vault (default: true)"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_vault_pack",
+                "description": "Compress pod workspace directly into a self-extracting cell in /marimo/notebook.py stored in MoLab cloud database (100% on MoLab, zero phone storage, zero external cloud).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "source_dir": {"type": "string", "description": "Pod directory to pack (default: /workspace)"},
+                        "max_size_mb": {"type": "number", "description": "Max vault size in MB (default: 25.0)"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_vault_unpack",
+                "description": "Extract workspace files from in-notebook vault directly into the pod workspace directory.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                        "target_dir": {"type": "string", "description": "Target pod directory (default: /workspace)"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
+            {
+                "name": "molab_vault_inspect",
+                "description": "Check whether an active in-notebook vault exists on MoLab servers and return its stored size.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "notebook_id": {"type": "string", "description": "Target notebook pod ID"},
+                    },
+                    "required": ["notebook_id"],
+                },
+            },
         ]
 
     def execute_tool(self, name: str, args: Dict[str, Any]) -> Any:
@@ -766,6 +816,31 @@ class MoLabMCPServer:
                 filename=args.get("filename"),
                 token=args.get("token"),
             )
+
+        elif name == "molab_make_permanent":
+            from molab_cli.sdk import Pod
+            pod = Pod(args["notebook_id"])
+            return pod.make_permanent(
+                interval=int(args.get("interval", 120)),
+                auto_pack=bool(args.get("auto_pack", True)),
+            )
+
+        elif name == "molab_vault_pack":
+            vault = MoLabVault(args["notebook_id"])
+            return vault.pack_workspace(
+                source_dir=args.get("source_dir", "/workspace"),
+                max_size_mb=float(args.get("max_size_mb", 25.0)),
+            )
+
+        elif name == "molab_vault_unpack":
+            vault = MoLabVault(args["notebook_id"])
+            return vault.unpack_workspace(
+                target_dir=args.get("target_dir", "/workspace"),
+            )
+
+        elif name == "molab_vault_inspect":
+            vault = MoLabVault(args["notebook_id"])
+            return vault.inspect_vault()
 
         raise ValueError(f"Unknown tool: {name}")
 

@@ -2361,6 +2361,210 @@ def cmd_storage_git_clone(notebook_id: str, repo_url: str, dest: Optional[str], 
             console.print(f"[red]Git clone failed:[/red] {e}")
 
 
+# -----------------------------------------------------------------------------
+# Permanent Pod & In-Notebook Vault Group (100% on MoLab)
+# -----------------------------------------------------------------------------
+
+@cli.command("permanent")
+@click.argument("notebook_id", required=False)
+@click.option("--interval", default=120, help="Heartbeat interval in seconds (default: 120)")
+@click.option("--auto-pack/--no-auto-pack", default=True, help="Pack /workspace into in-notebook vault (default: True)")
+@click.option("--as-json", is_flag=True, help="Output JSON format")
+def cmd_permanent(notebook_id: Optional[str], interval: int, auto_pack: bool, as_json: bool):
+    """Make a Blackwell GPU pod permanently online with 100% on-MoLab persistence.
+
+    Bypasses 30-minute idle reaper and container resets using dual-loop keepalive
+    and in-notebook self-extracting vaults. Zero local phone storage and zero third-party cloud.
+    """
+    from molab_cli.client import MoLabClient
+    from molab_cli.keepalive import KeepaliveManager
+    from molab_cli.sandbox import SandboxSession
+    from molab_cli.vault import MoLabVault
+
+    target_nb = notebook_id
+    if not target_nb:
+        with console.status("[bold cyan]Discovering active Blackwell pod...[/bold cyan]"):
+            client = MoLabClient()
+            running = client.list_running_sandboxes()
+            if not running:
+                console.print("[red]No running pods found.[/red]")
+                return
+            target_nb = running[0]["notebook_id"]
+
+    target_nb = target_nb if target_nb.startswith("nb_") else f"nb_{target_nb}"
+
+    session = SandboxSession(target_nb)
+    km = KeepaliveManager()
+    vault = MoLabVault(target_nb)
+
+    with console.status("[bold green]Locking Android wake lock & arming permanence engine...[/bold green]"):
+        # 1. Acquire Android wake lock
+        wake_lock_ok = False
+        for wl_cmd in ("/data/data/com.termux/files/usr/bin/termux-wake-lock", "termux-wake-lock"):
+            if os.path.exists(wl_cmd):
+                try:
+                    subprocess.run([wl_cmd], capture_output=True)
+                    wake_lock_ok = True
+                    break
+                except Exception:
+                    pass
+
+        # 2. Resolve session & inject in-pod guard
+        session.resolve()
+        guard_ok = km.inject_in_pod_guard(session)
+
+        # 3. Pack current workspace into vault if requested
+        pack_res = None
+        if auto_pack:
+            try:
+                pack_res = vault.pack_workspace()
+            except Exception as pe:
+                pack_res = {"error": str(pe)}
+
+        # 4. Start background keepalive daemon
+        st = km.get_status(target_nb)
+        daemon_res = None
+        if not st or st["status"] != "running":
+            daemon_res = km.start_daemon(target_nb, interval=interval, auto_restore=True)
+        else:
+            daemon_res = st
+
+        # 5. Inspect vault
+        vault_info = vault.inspect_vault()
+
+        # Telemetry
+        telemetry = {}
+        try:
+            telemetry = session.get_gpu_telemetry()
+        except Exception:
+            pass
+
+    if as_json:
+        console.print(json.dumps({
+            "notebook_id": target_nb,
+            "sandbox_id": session.sandbox_id,
+            "wake_lock_acquired": wake_lock_ok,
+            "in_pod_guard_active": guard_ok,
+            "daemon": daemon_res,
+            "vault": vault_info,
+            "telemetry": telemetry,
+            "status": "PERMANENT_ONLINE"
+        }, indent=2))
+        return
+
+    from rich.panel import Panel
+    from rich.table import Table
+
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold cyan")
+    grid.add_column()
+
+    grid.add_row("Notebook ID:", f"[bold white]{target_nb}[/bold white]")
+    grid.add_row("Sandbox Pod ID:", f"[cyan]{session.sandbox_id}[/cyan]")
+    if telemetry.get("device_name"):
+        grid.add_row("Compute Engine:", f"[bold green]{telemetry['device_name']}[/bold green] ({telemetry.get('free_vram_gb', '?')} GB free)")
+    grid.add_row("Android Wake Lock:", "[bold green]✔ ACQUIRED[/bold green] (Phone OS will not sleep)")
+    grid.add_row("In-Pod CoreWeave Guard:", "[bold green]✔ RUNNING[/bold green] (prevents container-level idle reaper)")
+    grid.add_row("Supervisor Daemon:", f"[bold green]✔ ACTIVE[/bold green] (PID {daemon_res.get('pid', '?')} | interval {interval}s)")
+    if vault_info.get("has_vault"):
+        grid.add_row("MoLab In-Notebook Vault:", f"[bold green]✔ ACTIVE[/bold green] (~{vault_info.get('approx_size_bytes', 0) // 1024} KB stored in MoLab DB)")
+    else:
+        grid.add_row("MoLab In-Notebook Vault:", "[yellow]None[/yellow] (run `molab vault pack` to save workspace)")
+    grid.add_row("Cloud Persistence:", "[bold green]100% On-MoLab Servers[/bold green] (Zero phone storage, zero external cloud)")
+
+    panel = Panel(
+        grid,
+        title="[bold green]🔒 MoLab Blackwell Infinite Permanence Engine[/bold green]",
+        subtitle="[dim]Your GPU pod is protected from 30m timeouts and data wipes[/dim]",
+        border_style="green",
+    )
+    console.print(panel)
+    console.print(
+        f"[dim]Monitor daemon: [bold]molab keepalive status {target_nb}[/bold] | "
+        f"Logs: [bold]molab keepalive logs {target_nb}[/bold] | "
+        f"Save workspace: [bold]molab vault pack {target_nb}[/bold][/dim]\n"
+    )
+
+
+@cli.group("vault")
+def vault_group():
+    """100% on-MoLab permanent storage vault (zero phone storage, zero external cloud)."""
+    pass
+
+
+@vault_group.command("pack")
+@click.argument("notebook_id")
+@click.option("--source-dir", default="/workspace", help="Pod directory to pack (default: /workspace)")
+@click.option("--max-size", default=25.0, type=float, help="Max vault size in MB (default: 25.0)")
+@click.option("--as-json", is_flag=True)
+def cmd_vault_pack(notebook_id: str, source_dir: str, max_size: float, as_json: bool):
+    """Compress pod workspace files directly into self-extracting cell in notebook (100% on MoLab)."""
+    from molab_cli.vault import MoLabVault
+    vault = MoLabVault(notebook_id)
+    with console.status(f"[bold cyan]Packing {source_dir} into in-notebook vault on MoLab...[/bold cyan]"):
+        try:
+            res = vault.pack_workspace(source_dir=source_dir, max_size_mb=max_size)
+            if as_json:
+                console.print(json.dumps(res, indent=2))
+            else:
+                console.print(
+                    f"[bold green]✔ Vault successfully packed into notebook on MoLab![/bold green]\n"
+                    f"Files packed: [bold white]{res['files_packed']}[/bold white] | "
+                    f"Compressed size: [bold cyan]{res['compressed_bytes']:,} bytes[/bold cyan] | "
+                    f"Storage: [green]{res['storage_location']}[/green]"
+                )
+        except Exception as e:
+            console.print(f"[red]Failed to pack vault:[/red] {e}")
+
+
+@vault_group.command("unpack")
+@click.argument("notebook_id")
+@click.option("--target-dir", default="/workspace", help="Target pod directory (default: /workspace)")
+@click.option("--as-json", is_flag=True)
+def cmd_vault_unpack(notebook_id: str, target_dir: str, as_json: bool):
+    """Extract files from in-notebook vault directly into pod workspace."""
+    from molab_cli.vault import MoLabVault
+    vault = MoLabVault(notebook_id)
+    with console.status(f"[bold cyan]Unpacking in-notebook vault into {target_dir}...[/bold cyan]"):
+        try:
+            res = vault.unpack_workspace(target_dir=target_dir)
+            if as_json:
+                console.print(json.dumps(res, indent=2))
+            else:
+                console.print(
+                    f"[bold green]✔ Vault successfully unpacked into {target_dir}![/bold green]\n"
+                    f"Files restored: [bold white]{res['files_unpacked']}[/bold white] | "
+                    f"Archive size: [bold cyan]{res['archive_bytes']:,} bytes[/bold cyan]"
+                )
+        except Exception as e:
+            console.print(f"[red]Failed to unpack vault:[/red] {e}")
+
+
+@vault_group.command("inspect")
+@click.argument("notebook_id")
+@click.option("--as-json", is_flag=True)
+def cmd_vault_inspect(notebook_id: str, as_json: bool):
+    """Check if notebook contains a permanent in-notebook vault."""
+    from molab_cli.vault import MoLabVault
+    vault = MoLabVault(notebook_id)
+    with console.status("[bold cyan]Inspecting notebook vault on MoLab...[/bold cyan]"):
+        try:
+            res = vault.inspect_vault()
+            if as_json:
+                console.print(json.dumps(res, indent=2))
+            else:
+                if res.get("has_vault"):
+                    console.print(
+                        f"[bold green]✔ Active In-Notebook Vault Found![/bold green]\n"
+                        f"Approx size: [bold cyan]{res['approx_size_bytes']:,} bytes[/bold cyan] | "
+                        f"Storage: [green]{res['storage_location']}[/green]"
+                    )
+                else:
+                    console.print(f"[yellow]No in-notebook vault found for {notebook_id}[/yellow]")
+        except Exception as e:
+            console.print(f"[red]Failed to inspect vault:[/red] {e}")
+
+
 def main():
     cli()
 

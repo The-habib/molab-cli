@@ -94,6 +94,15 @@ class KeepaliveManager:
                 f"Keepalive daemon already running for {nb_id} (PID {existing['pid']})"
             )
 
+        # Acquire Termux wake lock on Android so phone CPU doesn't sleep in background
+        for wl_cmd in ("/data/data/com.termux/files/usr/bin/termux-wake-lock", "termux-wake-lock"):
+            if os.path.exists(wl_cmd):
+                try:
+                    subprocess.run([wl_cmd], capture_output=True)
+                    break
+                except Exception:
+                    pass
+
         log_path = get_keepalive_log_path(nb_id)
         cmd = [
             sys.executable,
@@ -254,6 +263,37 @@ class KeepaliveManager:
             except Exception:
                 return False
 
+    def inject_in_pod_guard(self, session: SandboxSession) -> bool:
+        """
+        Deploy and start self-sustaining in-pod guard daemon directly inside the container.
+        Keeps Marimo process active internally even if external network disconnects.
+        """
+        try:
+            check = session.execute_command("pgrep -f _molab_guard.py || echo 0", timeout=8.0).strip()
+            if check != "0" and check:
+                return True
+            guard_py = (
+                "import time, urllib.request\\n"
+                "while True:\\n"
+                "    try:\\n"
+                "        with urllib.request.urlopen('http://localhost:8080/api/status', timeout=5):\\n"
+                "            pass\\n"
+                "        with open('/tmp/_guard.ts', 'w') as f:\\n"
+                "            f.write(str(time.time()))\\n"
+                "    except Exception:\\n"
+                "        pass\\n"
+                "    time.sleep(25)\\n"
+            )
+            import shlex
+            deploy_cmd = (
+                f"echo {shlex.quote(guard_py)} > /tmp/_molab_guard.py && "
+                "nohup python3 /tmp/_molab_guard.py > /dev/null 2>&1 &"
+            )
+            session.execute_command(deploy_cmd, timeout=12.0)
+            return True
+        except Exception:
+            return False
+
     def run_loop(
         self,
         notebook_id: str,
@@ -320,7 +360,22 @@ class KeepaliveManager:
                         f"Pod reset detected! Sandbox changed from {last_known_sandbox_id} to {session.sandbox_id}."
                     )
                     if auto_restore:
-                        logger.info("Auto-restoring latest workspace snapshot into resurrected pod...")
+                        # First check in-notebook vault (100% on MoLab)
+                        try:
+                            from molab_cli.vault import MoLabVault
+                            v_info = MoLabVault(nb_id).inspect_vault()
+                            if v_info.get("has_vault"):
+                                logger.info("Restoring workspace from in-notebook vault (100% on MoLab)...")
+                                try:
+                                    MoLabVault(nb_id).unpack_workspace()
+                                    logger.info("Successfully unpacked in-notebook vault into /workspace.")
+                                except Exception as ve:
+                                    logger.error(f"Vault auto-unpack error: {ve}")
+                        except Exception as vault_err:
+                            logger.debug(f"Vault auto-restore check info: {vault_err}")
+
+                        # Also check snapshot manager
+                        logger.info("Checking for workspace snapshot restoration...")
                         try:
                             res = snap_mgr.restore_snapshot(nb_id)
                             restores_triggered += 1
@@ -328,11 +383,14 @@ class KeepaliveManager:
                                 f"Successfully auto-restored {res['files_restored']} files from snapshot {res['snapshot_id']} in {res['duration_seconds']}s"
                             )
                         except Exception as restore_err:
-                            logger.error(f"Failed to auto-restore workspace snapshot: {restore_err}")
+                            logger.debug(f"Snapshot restore info: {restore_err}")
 
                 last_known_sandbox_id = session.sandbox_id
 
-                # 3. Ping Data Plane HTTP Proxy to keep CoreWeave TCP socket alive
+                # 3. Ensure In-Pod Self-Sustaining Guard is running inside container
+                self.inject_in_pod_guard(session)
+
+                # 4. Ping Data Plane HTTP Proxy to keep CoreWeave TCP socket alive
                 ping_ok = self.ping_data_plane(session)
                 if not ping_ok:
                     # Fallback to WebSocket lightweight probe

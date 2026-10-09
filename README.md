@@ -14,9 +14,9 @@
   <a href="#"><img src="https://img.shields.io/badge/GPU-NVIDIA%20Blackwell%20(96GB%20VRAM)-76b900.svg" alt="GPU"></a>
   <a href="#"><img src="https://img.shields.io/badge/Transfer-Native%20HTTP%2F2%20Streaming-success.svg" alt="File Transfer"></a>
   <a href="#"><img src="https://img.shields.io/badge/Jobs-SQLite%20DAG%20%26%20Batch%20Queue-orange.svg" alt="Jobs"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Persistence-Anti--Idle%20Heartbeat%20%26%20Snapshots-emerald.svg" alt="Persistence"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(38%20Tools)-purple.svg" alt="MCP"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-86%20Passed%20(100%25)-success.svg" alt="Tests"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Persistence-100%25%20On--MoLab%20Vault%20%26%20Keepalive-emerald.svg" alt="Persistence"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(42%20Tools)-purple.svg" alt="MCP"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-92%20Passed%20(100%25)-success.svg" alt="Tests"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-Termux%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
@@ -371,6 +371,30 @@ molab storage hf-push <id> /workspace/finetune my-org/my-finetuned-model
 molab storage git-clone <id> https://github.com/vllm-project/vllm.git
 ```
 
+### 11. 1-Click Infinite Pod Permanence (v2.3)
+Transform any Blackwell GPU pod into an infinite, permanently online machine that defeats both the 30-minute idle reaper and container resets:
+```bash
+# One command does everything: locks Android wake-lock, deploys in-pod self-sustaining guard,
+# packs workspace into MoLab cloud vault, and launches autonomous supervisor daemon:
+molab permanent <id>
+
+# Auto-discover first free Blackwell pod and make permanent:
+molab permanent
+```
+
+### 12. 100% On-MoLab Storage Vault (v2.3)
+Permanent workspace persistence stored directly inside `/marimo/notebook.py` metadata in MoLab's cloud database. **Zero phone storage and zero third-party cloud accounts required.**
+```bash
+# Pack /workspace directly into notebook cell on MoLab:
+molab vault pack <id>
+
+# Inspect active vault metadata and size:
+molab vault inspect <id>
+
+# Manually restore / unpack vault into /workspace:
+molab vault unpack <id>
+```
+
 ---
 
 ## 🤖 Model Context Protocol (MCP) Integration
@@ -388,7 +412,7 @@ molab storage git-clone <id> https://github.com/vllm-project/vllm.git
 }
 ```
 
-### Exposed MCP Tools (38 Typed Tools):
+### Exposed MCP Tools (42 Typed Tools):
 - **`molab_doctor`**: Diagnose environment health and connectivity.
 - **`molab_capabilities`**: Discover supported hardware, storage, and runtimes.
 - **`molab_list_pods`**: List all notebooks and active sandboxes.
@@ -424,6 +448,10 @@ molab storage git-clone <id> https://github.com/vllm-project/vllm.git
 - **`molab_keepalive_start`**: Start background anti-idle daemon with auto-restore.
 - **`molab_keepalive_stop`**: Stop running anti-idle keepalive daemon.
 - **`molab_keepalive_status`**: Inspect keepalive daemon status and remaining session TTL.
+- **`molab_make_permanent`**: Transform pod into infinite 24/7 machine with wake-lock & vault.
+- **`molab_vault_pack`**: Pack workspace files directly into in-notebook vault (100% on MoLab).
+- **`molab_vault_unpack`**: Extract stored files from in-notebook vault into `/workspace`.
+- **`molab_vault_inspect`**: Inspect active vault status and byte size on MoLab.
 - **`molab_storage_backup`**: Sync pod directory directly to S3/R2/B2/GCS via rclone.
 - **`molab_storage_restore`**: Restore pod directory directly from cloud via rclone.
 - **`molab_storage_hf_pull`**: Download model/dataset directly from Hugging Face Hub to pod.
@@ -448,10 +476,15 @@ pod = sdk.get_free_pod()
 if not pod:
     raise RuntimeError("No idle Blackwell pod available")
 
-# 3. Start anti-idle daemon to prevent the 30-minute session timeout
-pod.start_keepalive(interval=120, auto_restore=True)
+# 3. Transform pod into a permanent non-stop machine (defeats 30m timeout + resets)
+perm = pod.make_permanent(interval=120, auto_pack=True)
+print("Permanence armed:", perm["in_pod_guard_active"])
 
-# 4. Delta synchronize project directory
+# 4. Pack workspace directly into 100% on-MoLab permanent vault
+vault_res = pod.vault_pack("/workspace")
+print("Vault packed on MoLab:", vault_res["compressed_bytes"], "bytes")
+
+# 5. Delta synchronize project directory
 pod.sync("./my_project", "/workspace/my_project")
 
 # 5. Capture a workspace snapshot before running heavy compute

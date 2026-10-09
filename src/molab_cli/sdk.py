@@ -17,6 +17,7 @@ from molab_cli.services import ServiceManager
 from molab_cli.snapshots import SnapshotManager
 from molab_cli.storage import StorageBridge
 from molab_cli.transfer import TransferManager
+from molab_cli.vault import MoLabVault
 from molab_cli.workloads import WorkloadRegistry
 
 
@@ -246,6 +247,55 @@ class Pod:
         """Access pod cloud storage bridge (rclone, Hugging Face, git)."""
         return StorageBridge(self.session)
 
+    # -------------------------------------------------------------------------
+    # In-Notebook Vault Subsystem (100% on MoLab)
+    # -------------------------------------------------------------------------
+
+    @property
+    def vault(self) -> MoLabVault:
+        """Access 100% on-MoLab in-notebook vault."""
+        return MoLabVault(self.notebook_id)
+
+    def vault_pack(self, source_dir: str = "/workspace", max_size_mb: float = 25.0) -> Dict[str, Any]:
+        """Compress workspace files into notebook metadata on MoLab servers."""
+        return self.vault.pack_workspace(source_dir=source_dir, max_size_mb=max_size_mb)
+
+    def vault_unpack(self, target_dir: str = "/workspace") -> Dict[str, Any]:
+        """Extract workspace files from in-notebook vault on the pod."""
+        return self.vault.unpack_workspace(target_dir=target_dir)
+
+    def vault_inspect(self) -> Dict[str, Any]:
+        """Inspect in-notebook vault metadata."""
+        return self.vault.inspect_vault()
+
+    def make_permanent(self, interval: int = 120, auto_pack: bool = True) -> Dict[str, Any]:
+        """Transform pod into permanent non-stop machine with wake lock, guard, and keepalive."""
+        km = KeepaliveManager(self._job_manager.db_path)
+        self.session.resolve()
+        guard_ok = km.inject_in_pod_guard(self.session)
+        pack_res = None
+        if auto_pack:
+            try:
+                pack_res = self.vault_pack()
+            except Exception as pe:
+                pack_res = {"error": str(pe)}
+
+        st = km.get_status(self.notebook_id)
+        if not st or st["status"] != "running":
+            daemon_res = km.start_daemon(self.notebook_id, interval=interval, auto_restore=True)
+        else:
+            daemon_res = st
+
+        return {
+            "notebook_id": self.notebook_id,
+            "sandbox_id": self.session.sandbox_id,
+            "in_pod_guard_active": guard_ok,
+            "daemon": daemon_res,
+            "vault": self.vault_inspect(),
+            "pack_result": pack_res,
+        }
+
+
 
 class MoLabSDK:
     """Unified Python SDK entry point for MoLab orchestration."""
@@ -366,4 +416,26 @@ class MoLabSDK:
     def list_keepalives(self) -> List[Dict[str, Any]]:
         """List all active or historic keepalive daemons."""
         return self.keepalive_manager.list_keepalives()
+
+    # -------------------------------------------------------------------------
+    # In-Notebook Vault & Permanence (100% on MoLab)
+    # -------------------------------------------------------------------------
+
+    def vault_pack(self, notebook_id: str, source_dir: str = "/workspace", max_size_mb: float = 25.0) -> Dict[str, Any]:
+        """Compress workspace files into notebook metadata on MoLab servers."""
+        return MoLabVault(notebook_id).pack_workspace(source_dir=source_dir, max_size_mb=max_size_mb)
+
+    def vault_unpack(self, notebook_id: str, target_dir: str = "/workspace") -> Dict[str, Any]:
+        """Extract workspace files from in-notebook vault on the pod."""
+        return MoLabVault(notebook_id).unpack_workspace(target_dir=target_dir)
+
+    def vault_inspect(self, notebook_id: str) -> Dict[str, Any]:
+        """Inspect in-notebook vault metadata."""
+        return MoLabVault(notebook_id).inspect_vault()
+
+    def make_permanent(self, notebook_id: str, interval: int = 120, auto_pack: bool = True) -> Dict[str, Any]:
+        """Make a pod permanent with wake-lock, in-pod guard, vault, and keepalive daemon."""
+        pod = self.get_pod(notebook_id)
+        return pod.make_permanent(interval=interval, auto_pack=auto_pack)
+
 

@@ -580,5 +580,50 @@ Leverage pod pre-installed tools (`rclone`, `huggingface-cli`, `git`) for multi-
   molab storage hf-pull nb_xxx meta-llama/Llama-3-8b --dest /workspace/llama3
   ```
 
+---
 
+## 13. Infinite Pod Permanence Engine (v2.3)
 
+### `molab permanent [notebook_id]`
+Transform a Blackwell GPU pod into an infinite, permanently online machine that defeats both the 30-minute idle reaper and container resets.
+
+* **What it does automatically:**
+  * Acquires Android Termux wake-lock (`termux-wake-lock`) so phone OS never sleeps.
+  * Injects and starts the self-sustaining in-pod guard (`/tmp/_molab_guard.py`) inside the container.
+  * Compresses `/workspace` into a permanent in-notebook vault saved to MoLab's cloud database.
+  * Launches the detached background supervisor daemon (renews Clerk tokens and pings Marimo proxy).
+* **Flags:**
+  * `--interval <seconds>`: Heartbeat frequency (default: 120s).
+  * `--auto-pack / --no-auto-pack`: Whether to auto-pack workspace into in-notebook vault (default: true).
+  * `-j, --json`: Output machine-readable JSON summary.
+* **Example:**
+  ```bash
+  # 1-Click permanent machine:
+  molab permanent nb_emuqXoWkVed6jPNZxND7eo
+
+  # Auto-discover first free Blackwell pod and make permanent:
+  molab permanent
+  ```
+
+---
+
+## 14. 100% On-MoLab Storage Vault (v2.3)
+
+### `molab vault <subcommand> <notebook_id> [args]`
+Permanent workspace persistence stored directly inside `/marimo/notebook.py` metadata in MoLab's cloud database. **Zero phone storage and zero third-party cloud accounts required.**
+
+* **Subcommands:**
+  * `pack <id>`: Compress pod `/workspace` into self-extracting Marimo cell (`--source-dir <dir>`, `--max-size <mb>`, `-j, --json`).
+  * `unpack <id>`: Extract stored vault archive directly into `/workspace` (`--target-dir <dir>`, `-j, --json`).
+  * `inspect <id>`: Check if notebook contains an active vault and report size (`-j, --json`).
+* **Example:**
+  ```bash
+  # Pack workspace into notebook metadata on MoLab:
+  molab vault pack nb_emuqXoWkVed6jPNZxND7eo
+
+  # Inspect vault on MoLab:
+  molab vault inspect nb_emuqXoWkVed6jPNZxND7eo
+
+  # Extract files back to /workspace:
+  molab vault unpack nb_emuqXoWkVed6jPNZxND7eo
+  ```
