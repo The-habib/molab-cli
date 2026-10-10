@@ -71,3 +71,26 @@ def test_cli_unauthenticated():
         assert res_json.exit_code == 0
         assert '"authenticated": false' in res_json.output
 
+
+def test_exec_missing_command_validation():
+    runner = CliRunner()
+    res = runner.invoke(cli, ["exec", "nb_test_123"])
+    assert res.exit_code == 1
+    assert "Missing command to execute on pod" in res.output
+
+
+def test_install_missing_packages_validation():
+    runner = CliRunner()
+    res = runner.invoke(cli, ["install", "nb_test_123"])
+    assert res.exit_code == 1
+    assert "No packages specified to install on pod" in res.output
+
+
+def test_tui_non_tty_exit():
+    from unittest.mock import patch
+    runner = CliRunner()
+    with patch("sys.stdin.isatty", return_value=False):
+        res = runner.invoke(cli, ["ui"])
+        assert res.exit_code == 0
+        assert "requires an interactive terminal" in res.output
+

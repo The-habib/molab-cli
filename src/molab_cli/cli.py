@@ -20,6 +20,7 @@ from rich.table import Table
 from molab_cli.auth import inspect_auth_status
 from molab_cli.client import MoLabClient
 from molab_cli.config import get_client_cookie, set_client_cookie
+from molab_cli.exceptions import ValidationError
 from molab_cli.sandbox import SandboxSession, LocalHttpForwarder, resolve_target_notebook
 from molab_cli.theme import (
     handle_cli_error,
@@ -340,6 +341,15 @@ def cmd_exec(notebook_id: str, command: Optional[str], timeout: float):
     """Execute a bash command inside the remote CoreWeave sandbox container."""
     client = MoLabClient()
     if command is None:
+        if notebook_id.startswith("nb_"):
+            handle_cli_error(
+                ValidationError(
+                    f"Missing command to execute on pod '{notebook_id}'.",
+                    hint=f"Provide the command to execute: molab exec {notebook_id} \"<command>\" (or run 'molab shell {notebook_id}' for interactive terminal).",
+                ),
+                title="Invalid Execution Command",
+            )
+            return
         actual_cmd = notebook_id
         try:
             target_nb = resolve_target_notebook(client, require_running=True)
@@ -778,20 +788,40 @@ def cmd_gpu(notebook_id: Optional[str], as_json: bool):
 
 
 @cli.command("install")
-@click.argument("notebook_id")
-@click.argument("packages", nargs=-1, required=True)
-def cmd_install(notebook_id: str, packages: tuple):
+@click.argument("target_or_pkg")
+@click.argument("extra_pkgs", nargs=-1)
+def cmd_install(target_or_pkg: str, extra_pkgs: tuple):
     """Install Python packages inside the remote pod environment using uv/pip."""
-    session = SandboxSession(notebook_id)
-    pkgs_list = list(packages)
-    with console.status(f"[bold cyan]Installing {', '.join(pkgs_list)} in pod...[/bold cyan]"):
+    client = MoLabClient()
+    if target_or_pkg.startswith("nb_"):
+        if not extra_pkgs:
+            handle_cli_error(
+                ValidationError(
+                    f"No packages specified to install on pod '{target_or_pkg}'.",
+                    hint=f"Specify one or more packages, e.g.: molab install {target_or_pkg} torch transformers",
+                ),
+                title="Missing Package Names",
+            )
+            return
+        target_nb = target_or_pkg
+        pkgs_list = list(extra_pkgs)
+    else:
+        try:
+            target_nb = resolve_target_notebook(client, require_running=True)
+        except Exception as e:
+            handle_cli_error(e, title="Remote Installation Target Failed")
+            return
+        pkgs_list = [target_or_pkg] + list(extra_pkgs)
+
+    session = SandboxSession(target_nb, client=client)
+    with console.status(f"[bold cyan]Installing {', '.join(pkgs_list)} in pod ({target_nb})...[/bold cyan]"):
         try:
             out = session.install_packages(pkgs_list)
             if out:
                 console.print(out)
             console.print(f"[green]✔ Successfully installed: {' '.join(pkgs_list)}[/green]")
         except Exception as e:
-            console.print(f"[red]Installation failed:[/red] {e}")
+            handle_cli_error(e, title="Installation Failed")
 
 
 @cli.command("forward")

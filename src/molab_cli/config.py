@@ -4,7 +4,7 @@ Configuration management for molab-cli.
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 CONFIG_DIR = Path.home() / ".config" / "molab"
 CONFIG_FILE = CONFIG_DIR / "config.json"

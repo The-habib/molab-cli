@@ -935,6 +935,11 @@ def _get_cached_free_pod(client: MoLabClient, running_pods: Dict[str, str]) -> O
 
 def start_interactive_tui() -> None:
     """Main interactive Control Center event loop."""
+    if not sys.stdin.isatty():
+        console.print("[yellow]Notice:[/yellow] Interactive TUI requires an interactive terminal (TTY).")
+        console.print("Run '[bold cyan]molab --help[/bold cyan]' for available commands, or use '[bold cyan]molab free[/bold cyan]', '[bold cyan]molab list[/bold cyan]', '[bold cyan]molab compute[/bold cyan]'.")
+        return
+
     if not ensure_authenticated():
         return
 
@@ -1026,9 +1031,13 @@ def start_interactive_tui() -> None:
             elif "Quick Guide" in action:
                 action_show_help()
 
-        except KeyboardInterrupt:
-            console.print("\n[dim]Returning to main menu...[/dim]")
-            continue
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Session closed. Goodbye![/dim]")
+            sys.exit(0)
         except Exception as e:
-            render_error_card("Unexpected Error", str(e))
-            questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
+            err_msg = str(e) or repr(e)
+            render_error_card("Unexpected Error", err_msg)
+            try:
+                questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
+            except (KeyboardInterrupt, EOFError):
+                break
