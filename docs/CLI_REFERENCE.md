@@ -179,6 +179,9 @@ Launch an industry-grade interactive terminal AI agent with real-time token stre
 * **Arguments:**
   * `[notebook_id]`: Cloud notebook ID (Optional; auto-discovers active Blackwell pod if omitted).
 * **Options:**
+  * `-p, --print <str>`: Execute a single prompt non-interactively and stream response.
+  * `--claude`: Launch the Anthropic Claude Code terminal agent attached to Blackwell GPU.
+  * `--hermes`: Launch the Nous Research Hermes terminal agent attached to Blackwell GPU.
   * `--think [full|compact|off]`: Reasoning display mode (Default: `full`).
     * `full`: Live thinking process box with token counter and stopwatch.
     * `compact`: Live pulse spinner collapsing into `💭 Thought for X.Xs (Y tokens)`.

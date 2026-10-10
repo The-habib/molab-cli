@@ -650,6 +650,30 @@ def run_claude_code_agent(
         console.print(f"[red]Error executing Claude Code agent:[/red] {e}")
 
 
+def run_hermes_agent(
+    notebook_id: str,
+    prompt: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
+) -> None:
+    """Launch Nous Research Hermes Agent connected to Blackwell GPU."""
+    from molab_cli.chat import ensure_claude_bridge
+    ensure_claude_bridge(8000, notebook_id=notebook_id)
+
+    hermes_bin = shutil.which("hermes") or "/data/data/com.termux/files/usr/bin/hermes"
+    args = [hermes_bin]
+    if prompt:
+        args.extend(["-z", prompt])
+    if extra_args:
+        args.extend(extra_args)
+
+    try:
+        subprocess.run(args)
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        console.print(f"[red]Error executing Hermes Agent:[/red] {e}")
+
+
 def run_terminal_chat(
     notebook_id: Optional[str] = None,
     max_tokens: int = 1024,
@@ -660,11 +684,14 @@ def run_terminal_chat(
     legacy: bool = False,
     prompt: Optional[str] = None,
     extra_args: Optional[List[str]] = None,
+    use_claude: bool = False,
+    use_hermes: bool = False,
 ) -> None:
     """
     Entry point to launch the interactive terminal agent.
     If notebook_id is omitted, dynamically discovers the active GPU pod.
-    Defaults to native Claude Code agent unless --legacy is passed or claude is missing.
+    Defaults to native MoLab interactive terminal agent with real-time reasoning stream.
+    Use --claude to run Claude Code, or --hermes to run Hermes Agent.
     """
     if not notebook_id:
         with console.status("[bold #00BD7D]Auto-discovering active Blackwell pod...[/bold #00BD7D]"):
@@ -675,9 +702,11 @@ def run_terminal_chat(
         console.print("[dim]Please specify a pod ID: molab chat <notebook_id>[/dim]")
         return
 
-    has_claude = bool(shutil.which("claude") or os.path.exists("/data/data/com.termux/files/usr/bin/claude"))
+    if use_hermes:
+        run_hermes_agent(notebook_id=notebook_id, prompt=prompt, extra_args=extra_args)
+        return
 
-    if not legacy and has_claude:
+    if use_claude:
         run_claude_code_agent(
             notebook_id=notebook_id,
             model_name=model_name,
@@ -694,5 +723,12 @@ def run_terminal_chat(
         think_mode=think_mode,
         system_prompt=system_prompt,
     )
+    if prompt:
+        if not agent.initialize():
+            return
+        agent.stream_response(prompt)
+        return
+
     agent.run()
+
 

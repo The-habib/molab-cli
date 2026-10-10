@@ -124,3 +124,26 @@ def test_discover_active_pod():
     mock_client.get_free_pod.return_value = {"recommended_free_pod": "nb_discovered_456"}
     pod_id = SandboxSession.discover_active_pod(client=mock_client)
     assert pod_id == "nb_discovered_456"
+
+
+def test_run_terminal_chat_routing():
+    from molab_cli.chat import run_terminal_chat
+
+    with patch("molab_cli.chat.run_hermes_agent") as mock_hermes, \
+         patch("molab_cli.chat.run_claude_code_agent") as mock_claude, \
+         patch("molab_cli.chat.TerminalAgentChat") as mock_agent_cls:
+        
+        # Hermes routing
+        run_terminal_chat("nb_test", use_hermes=True, prompt="test hermes")
+        mock_hermes.assert_called_once_with(notebook_id="nb_test", prompt="test hermes", extra_args=None)
+
+        # Claude routing
+        run_terminal_chat("nb_test", use_claude=True, prompt="test claude")
+        mock_claude.assert_called_once()
+
+        # Native Terminal Agent routing (default)
+        instance = mock_agent_cls.return_value
+        instance.initialize.return_value = True
+        run_terminal_chat("nb_test", prompt="test native")
+        instance.stream_response.assert_called_once_with("test native")
+

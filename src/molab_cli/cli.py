@@ -783,7 +783,8 @@ def cmd_bridge_stop():
 @click.option("--model", "model_name", default=None, help="Target model identifier (auto-detected if omitted)")
 @click.option("--system", "system_prompt", default=None, help="Custom system prompt")
 @click.option("-p", "--print", "prompt", default=None, help="Execute prompt non-interactively and print response")
-@click.option("--legacy", is_flag=True, help="Use legacy rich terminal REPL instead of native Claude Code agent")
+@click.option("--claude", is_flag=True, help="Launch Claude Code terminal agent")
+@click.option("--hermes", is_flag=True, help="Launch Hermes Agent terminal session")
 @click.argument("extra_args", nargs=-1)
 def cmd_chat(
     notebook_id: Optional[str],
@@ -793,10 +794,11 @@ def cmd_chat(
     model_name: Optional[str],
     system_prompt: Optional[str],
     prompt: Optional[str],
-    legacy: bool,
+    claude: bool,
+    hermes: bool,
     extra_args: Tuple[str, ...],
 ):
-    """Industry-grade terminal coding agent powered by Claude Code on MoLab Blackwell GPU."""
+    """Interactive terminal AI agent with real-time reasoning stream on MoLab Blackwell GPU."""
     from molab_cli.chat import run_terminal_chat
     run_terminal_chat(
         notebook_id=notebook_id,
@@ -805,9 +807,10 @@ def cmd_chat(
         think_mode=think_mode,
         system_prompt=system_prompt,
         model_name=model_name,
-        legacy=legacy,
         prompt=prompt,
         extra_args=list(extra_args) if extra_args else None,
+        use_claude=claude,
+        use_hermes=hermes,
     )
 
 

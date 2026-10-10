@@ -473,6 +473,13 @@ async def chat_completions_endpoint(request: Request):
     body["model"] = target_model
     logger.info(f"OpenAI completion request [{req_model} -> {target_model}] (stream={is_stream})")
 
+    # Dynamic context length protection: clamp max_tokens if prompt is large
+    total_chars = sum(len(str(m.get("content", "") or "")) for m in messages)
+    est_prompt_tokens = max(1, total_chars // 3)
+    if est_prompt_tokens + max_tokens > 64000:
+        max_tokens = max(256, 64000 - est_prompt_tokens)
+        body["max_tokens"] = max_tokens
+
     extra_payload = {k: v for k, v in body.items() if k not in ("messages", "max_tokens", "temperature", "model", "stream")}
 
     if not is_stream:
