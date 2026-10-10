@@ -788,10 +788,11 @@ class SandboxSession:
 
     def stream_chat_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         max_tokens: int = 1024,
         temperature: float = 0.7,
         model: Optional[str] = None,
+        extra_payload: Optional[Dict[str, Any]] = None,
     ):
         """Synchronous wrapper for async_stream_chat_completion."""
         import queue
@@ -803,7 +804,11 @@ class SandboxSession:
             async def _run():
                 try:
                     async for delta in self.async_stream_chat_completion(
-                        messages=messages, max_tokens=max_tokens, temperature=temperature, model=model
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        model=model,
+                        extra_payload=extra_payload,
                     ):
                         q.put(delta)
                 except Exception as ex:

@@ -785,6 +785,8 @@ def cmd_bridge_stop():
 @click.option("-p", "--print", "prompt", default=None, help="Execute prompt non-interactively and print response")
 @click.option("--claude", is_flag=True, help="Launch Claude Code terminal agent")
 @click.option("--hermes", is_flag=True, help="Launch Hermes Agent terminal session")
+@click.option("-y", "--auto", "--yolo", "auto_approve", is_flag=True, help="Auto-approve tool actions without interactive confirmation")
+@click.option("--no-tools", is_flag=True, help="Disable workspace tool execution (pure conversation mode)")
 @click.argument("extra_args", nargs=-1)
 def cmd_chat(
     notebook_id: Optional[str],
@@ -796,9 +798,11 @@ def cmd_chat(
     prompt: Optional[str],
     claude: bool,
     hermes: bool,
+    auto_approve: bool,
+    no_tools: bool,
     extra_args: Tuple[str, ...],
 ):
-    """Interactive terminal AI agent with real-time reasoning stream on MoLab Blackwell GPU."""
+    """Industry-grade terminal coding agent with autonomous tool execution on MoLab Blackwell GPU."""
     from molab_cli.chat import run_terminal_chat
     run_terminal_chat(
         notebook_id=notebook_id,
@@ -811,6 +815,8 @@ def cmd_chat(
         extra_args=list(extra_args) if extra_args else None,
         use_claude=claude,
         use_hermes=hermes,
+        auto_approve=auto_approve,
+        no_tools=no_tools,
     )
 
 

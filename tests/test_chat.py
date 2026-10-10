@@ -110,6 +110,20 @@ def test_slash_command_handling():
     agent.handle_slash_command("/clear")
     assert len(agent.history) == 0
 
+    # Test auto toggle
+    assert agent.auto_approve is False
+    agent.handle_slash_command("/auto")
+    assert agent.auto_approve is True
+
+    # Test context command
+    agent.handle_slash_command("/context")
+
+    # Test tools command
+    agent.handle_slash_command("/tools")
+
+    # Test undo when empty
+    agent.handle_slash_command("/undo")
+
 
 def test_get_active_model_parsing():
     session = SandboxSession("nb_test_123")

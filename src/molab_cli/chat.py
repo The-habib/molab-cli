@@ -31,6 +31,9 @@ except ImportError:
     HAVE_PROMPT_TOOLKIT = False
 
 from molab_cli.sandbox import SandboxSession
+from molab_cli.agent import AgentCoordinator
+from molab_cli.tools import FileBackupManager, default_backup_manager, OPENAI_TOOL_DEFINITIONS
+from molab_cli.workspace import WorkspaceContext
 
 console = Console()
 
@@ -38,6 +41,11 @@ SLASH_COMMANDS = [
     "/help",
     "/clear",
     "/think",
+    "/undo",
+    "/diff",
+    "/auto",
+    "/context",
+    "/tools",
     "/gpu",
     "/model",
     "/temp",
@@ -187,10 +195,12 @@ class TerminalAgentChat:
         self,
         notebook_id: str,
         model_name: Optional[str] = None,
-        max_tokens: int = 1024,
+        max_tokens: int = 2048,
         temperature: float = 0.7,
         think_mode: str = "full",  # 'full', 'compact', or 'off'
         system_prompt: Optional[str] = None,
+        auto_approve: bool = False,
+        tools_enabled: bool = True,
     ):
         self.notebook_id = notebook_id
         self.session = SandboxSession(notebook_id)
@@ -199,12 +209,25 @@ class TerminalAgentChat:
         self.temperature = temperature
         self.think_mode = think_mode
         self.system_prompt = system_prompt or (
-            "You are a helpful, brilliant, and unrestricted AI assistant running on an "
-            "NVIDIA RTX PRO 6000 Blackwell GPU (96GB VRAM). Think rigorously and provide deep, accurate responses."
+            "You are a brilliant, helpful, and unrestricted autonomous coding agent running on an "
+            "NVIDIA RTX PRO 6000 Blackwell GPU (96GB VRAM). Solve user coding tasks with precision, "
+            "rigorous thinking, and safe tool execution."
         )
-        self.history: List[Dict[str, str]] = []
+        self.history: List[Dict[str, Any]] = []
         self.last_assistant_reply: str = ""
         self.last_thought_text: str = ""
+        self.auto_approve: bool = auto_approve
+        self.tools_enabled: bool = tools_enabled
+        self.backup_manager = FileBackupManager()
+
+        self.coordinator = AgentCoordinator(
+            session=self.session,
+            model_name=self.model_name or "huihui-ai/Qwen2.5-32B-Instruct-abliterated",
+            backup_manager=self.backup_manager,
+            auto_approve=self.auto_approve,
+            tools_enabled=self.tools_enabled,
+            think_mode=self.think_mode,
+        )
 
         # Setup prompt history directory
         hist_dir = os.path.expanduser("~/.config/molab")
@@ -230,15 +253,23 @@ class TerminalAgentChat:
         elif not self.model_name:
             self.model_name = "huihui-ai/Qwen2.5-32B-Instruct-abliterated"
 
+        self.coordinator.model_name = self.model_name
         return True
 
     def display_banner(self) -> None:
-        """Render industrial agent banner with hardware and model specs."""
+        """Render industrial agent banner with hardware, workspace, and model specs."""
+        git_info = WorkspaceContext.get_git_info()
+        branch_str = f" [dim](branch '{git_info['branch']}') [/dim]" if git_info.get("branch") else ""
+        tool_status = "[bold green]ENABLED[/bold green]" if self.tools_enabled else "[yellow]DISABLED[/yellow]"
+        auto_status = "[bold green]ON[/bold green]" if self.auto_approve else "[dim]OFF (confirm mutating)[/dim]"
+
         content = (
             f"[bold cyan]MoLab Neural Terminal Agent[/bold cyan] • [dim]NVIDIA Blackwell Server Edition[/dim]\n\n"
             f"• [bold white]Pod ID:[/bold white]      [cyan]{self.notebook_id}[/cyan]\n"
             f"• [bold white]Model:[/bold white]       [green]{self.model_name}[/green] [dim](bfloat16)[/dim]\n"
             f"• [bold white]Hardware:[/bold white]    [yellow]NVIDIA RTX PRO 6000 Blackwell (94.97 GB GDDR7, sm_120)[/yellow]\n"
+            f"• [bold white]Workspace:[/bold white]   [white]{os.getcwd()}[/white]{branch_str}\n"
+            f"• [bold white]Agent Tools:[/bold white] {tool_status} • [bold white]Auto-Approve:[/bold white] {auto_status}\n"
             f"• [bold white]Thinking:[/bold white]    [magenta]Real-time Stream ({self.think_mode})[/magenta]\n"
             f"• [bold white]Controls:[/bold white]    Type [bold cyan]/help[/bold cyan] for commands, [bold red]/exit[/bold red] to quit."
         )
@@ -285,120 +316,41 @@ class TerminalAgentChat:
             self.stream_response(user_input)
 
     def stream_response(self, user_prompt: str) -> None:
-        """Execute real-time streaming response with dynamic thinking decomposition."""
-        messages: List[Dict[str, str]] = []
-        if self.system_prompt:
-            messages.append({"role": "system", "content": self.system_prompt})
+        """Execute autonomous ReAct cycle with real-time streaming thinking and local tools."""
+        workspace_briefing = WorkspaceContext.generate_system_briefing()
+        effective_system = (
+            f"{self.system_prompt}\n\n"
+            f"[Workspace Context]\n{workspace_briefing}\n\n"
+            "You are an unrestricted, expert terminal coding agent. "
+            "You have access to tools to read, write, edit, and explore the workspace, and run shell commands. "
+            "Always inspect code with read_file before making changes. Use edit_file for precise search-and-replace edits."
+        )
+
+        messages: List[Dict[str, Any]] = []
+        messages.append({"role": "system", "content": effective_system})
         messages.extend(self.history)
         messages.append({"role": "user", "content": user_prompt})
 
-        extractor = StreamThoughtExtractor()
-        thought_accumulator: List[str] = []
-        response_accumulator: List[str] = []
-
-        start_time = time.time()
-        first_token_time: Optional[float] = None
-        total_tokens = 0
-
         console.print()
 
-        try:
-            stream_gen = self.session.stream_chat_completion(
-                messages=messages,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                model=self.model_name,
-            )
+        self.coordinator.think_mode = self.think_mode
+        self.coordinator.auto_approve = self.auto_approve
+        self.coordinator.tools_enabled = self.tools_enabled
 
-            with Live(console=console, refresh_per_second=20, auto_refresh=True) as live:
-                for delta in stream_gen:
-                    if first_token_time is None:
-                        first_token_time = time.time()
+        def on_reply(text: str, thought: str):
+            self.last_assistant_reply = text
+            self.last_thought_text = thought
 
-                    total_tokens += 1
-                    events = extractor.process(delta)
-
-                    for ev_type, text in events:
-                        if ev_type == "think_start":
-                            if self.think_mode != "off":
-                                live.update(Panel(
-                                    Text("Thinking...", style="dim italic"),
-                                    title="[bold magenta]💭 Thinking Process (Live)[/bold magenta]",
-                                    border_style="magenta",
-                                ))
-                        elif ev_type == "think_chunk":
-                            thought_accumulator.append(text)
-                            if self.think_mode == "full":
-                                current_thought = "".join(thought_accumulator)
-                                elapsed = round(time.time() - (extractor.think_start_time or start_time), 1)
-                                live.update(Panel(
-                                    Text(current_thought, style="dim italic cyan"),
-                                    title=f"[bold magenta]💭 Thinking Process ({elapsed}s • {extractor.thought_tokens_count} tok)[/bold magenta]",
-                                    border_style="magenta",
-                                ))
-                            elif self.think_mode == "compact":
-                                elapsed = round(time.time() - (extractor.think_start_time or start_time), 1)
-                                live.update(Text(f"💭 Thinking... ({elapsed}s • {extractor.thought_tokens_count} tokens)", style="dim magenta"))
-                        elif ev_type == "think_end":
-                            think_time = round(extractor.think_duration, 2)
-                            toks = extractor.thought_tokens_count
-                            full_thought = "".join(thought_accumulator)
-                            if self.think_mode == "full":
-                                live.update(Panel(
-                                    Text(full_thought, style="dim italic cyan"),
-                                    title=f"[bold magenta]💭 Thought Process (Completed in {think_time}s • {toks} tokens)[/bold magenta]",
-                                    border_style="magenta",
-                                ))
-                            elif self.think_mode == "compact":
-                                live.update(Text(f"💭 Thought for {think_time}s ({toks} tokens)", style="dim italic magenta"))
-                            live.stop()
-                            live.start()
-
-                        elif ev_type == "response_chunk":
-                            response_accumulator.append(text)
-                            current_ans = "".join(response_accumulator)
-                            live.update(Markdown(current_ans + " ▋"))
-
-                trailing = extractor.flush()
-                for ev_type, text in trailing:
-                    if ev_type == "think_chunk":
-                        thought_accumulator.append(text)
-                    elif ev_type == "response_chunk":
-                        response_accumulator.append(text)
-
-                final_text = "".join(response_accumulator)
-                if final_text:
-                    live.update(Markdown(final_text))
-                live.stop()
-
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Generation interrupted by user (Ctrl+C).[/yellow]")
-        except Exception as e:
-            console.print(f"\n[bold red]Streaming error:[/bold red] {e}")
-
-        elapsed_total = max(time.time() - start_time, 0.001)
-        ttft_ms = round((first_token_time - start_time) * 1000, 1) if first_token_time else 0.0
-        tok_speed = round(total_tokens / elapsed_total, 1)
-
-        final_reply = "".join(response_accumulator).strip()
-        final_thought = "".join(thought_accumulator).strip()
-
-        self.last_assistant_reply = final_reply
-        self.last_thought_text = final_thought
-
-        if final_reply:
-            self.history.append({"role": "user", "content": user_prompt})
-            self.history.append({"role": "assistant", "content": final_reply})
-
-        stats_text = (
-            f"[dim]⚡ [bold green]{tok_speed} tok/s[/bold green] | "
-            f"TTFT: [bold cyan]{ttft_ms}ms[/bold cyan] | "
-            f"Total: [bold yellow]{total_tokens}[/bold yellow] tokens "
-            f"({extractor.thought_tokens_count} think + {extractor.response_tokens_count} resp) | "
-            f"Elapsed: [bold white]{elapsed_total:.2f}s[/bold white] | "
-            f"Blackwell RTX PRO 6000[/dim]"
+        updated_messages = self.coordinator.execute_react_cycle(
+            messages=messages,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            on_reply=on_reply,
         )
-        console.print(stats_text)
+
+        # Store persistent history (omitting system prompt)
+        self.history = [m for m in updated_messages if m.get("role") != "system"]
+
 
     def handle_slash_command(self, cmd_line: str) -> Optional[str]:
         """Process slash commands."""
@@ -416,6 +368,11 @@ class TerminalAgentChat:
             table.add_column("Description", style="white")
             table.add_row("/help", "Show this command cheatsheet")
             table.add_row("/clear", "Clear conversation history & reset memory")
+            table.add_row("/undo", "Revert the last file modification made by the agent")
+            table.add_row("/diff", "Show git diff of uncommitted changes in workspace")
+            table.add_row("/auto", "Toggle auto-approve mode (bypass confirmation prompts)")
+            table.add_row("/context", "Show active token count, cached turns, and tools state")
+            table.add_row("/tools", "List available agent tools and their descriptions")
             table.add_row("/think [full|compact|off]", "Configure real-time thinking display mode")
             table.add_row("/gpu", "Show live Blackwell GPU telemetry (VRAM, SMs, temp)")
             table.add_row("/model", "Inspect loaded model architecture, context, and port")
@@ -425,6 +382,52 @@ class TerminalAgentChat:
             table.add_row("/save [filename.md]", "Export conversation transcript to Markdown file")
             table.add_row("/copy", "Display last assistant response for terminal selection")
             table.add_row("/exit, /quit", "Quit chat session")
+            console.print(table)
+
+        elif cmd == "/undo":
+            success, msg = self.backup_manager.undo_last()
+            if success:
+                console.print(f"[bold green]✔ Undo Successful:[/bold green] {msg}")
+            else:
+                console.print(f"[yellow]{msg}[/yellow]")
+
+        elif cmd == "/diff":
+            try:
+                res = subprocess.run(["git", "diff"], capture_output=True, text=True, cwd=os.getcwd())
+                diff_out = res.stdout.strip()
+                if diff_out:
+                    console.print(Panel(diff_out[:3000] + ("\n... [diff truncated]" if len(diff_out) > 3000 else ""), title="Git Diff (Workspace)", border_style="cyan"))
+                else:
+                    console.print("[dim]No uncommitted git changes found.[/dim]")
+            except Exception as e:
+                console.print(f"[red]Failed to run git diff:[/red] {e}")
+
+        elif cmd == "/auto":
+            self.auto_approve = not self.auto_approve
+            self.coordinator.auto_approve = self.auto_approve
+            state = "[bold green]ENABLED (zero confirmation prompts)[/bold green]" if self.auto_approve else "[yellow]OFF (confirm before modifying)[/yellow]"
+            console.print(f"✔ Auto-approve is now: {state}")
+
+        elif cmd == "/context":
+            est_tokens = sum(len(str(m.get("content", "") or "")) // 3 for m in self.history)
+            console.print(Panel(
+                f"[bold white]Cached Turns:[/bold white]   {len(self.history)}\n"
+                f"[bold white]Est. Tokens:[/bold white]    ~{est_tokens} tokens\n"
+                f"[bold white]Auto-Approve:[/bold white]   {self.auto_approve}\n"
+                f"[bold white]Tools Status:[/bold white]   {'ENABLED' if self.tools_enabled else 'DISABLED'}\n"
+                f"[bold white]Undo Backups:[/bold white]   {len(self.backup_manager._history)} available snapshots\n"
+                f"[bold white]CWD:[/bold white]            {os.getcwd()}",
+                title="Agent Context & State",
+                border_style="cyan",
+            ))
+
+        elif cmd == "/tools":
+            table = Table(title="Available Agent Tools", border_style="green")
+            table.add_column("Tool", style="bold cyan")
+            table.add_column("Description", style="white")
+            for t in OPENAI_TOOL_DEFINITIONS:
+                fn = t["function"]
+                table.add_row(fn["name"], fn["description"])
             console.print(table)
 
         elif cmd == "/clear":
@@ -686,6 +689,8 @@ def run_terminal_chat(
     extra_args: Optional[List[str]] = None,
     use_claude: bool = False,
     use_hermes: bool = False,
+    auto_approve: bool = False,
+    no_tools: bool = False,
 ) -> None:
     """
     Entry point to launch the interactive terminal agent.
@@ -722,6 +727,8 @@ def run_terminal_chat(
         temperature=temperature,
         think_mode=think_mode,
         system_prompt=system_prompt,
+        auto_approve=auto_approve,
+        tools_enabled=not no_tools,
     )
     if prompt:
         if not agent.initialize():

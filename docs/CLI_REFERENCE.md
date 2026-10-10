@@ -175,24 +175,38 @@ Bridge the pod's model server (port 8000) to localhost (`http://127.0.0.1:8000/v
   ```
 
 ### `molab chat [notebook_id] [OPTIONS]`
-Launch an industry-grade interactive terminal AI agent with real-time token streaming, thinking/reasoning decomposition (`<think>` tags and native `reasoning_content`), prompt history, live speed metrics, and slash commands.
+Launch an industry-grade autonomous terminal coding agent powered by NVIDIA RTX PRO 6000 Blackwell GPU. Features real-time token streaming, live thinking/reasoning decomposition, local workspace tools (`run_shell`, `read_file`, `write_file`, `edit_file`, `list_dir`, `grep_search`), automated ReAct execution loops, instant `/undo` file recovery, and git awareness.
 * **Arguments:**
   * `[notebook_id]`: Cloud notebook ID (Optional; auto-discovers active Blackwell pod if omitted).
 * **Options:**
   * `-p, --print <str>`: Execute a single prompt non-interactively and stream response.
+  * `-y, --auto, --yolo`: Auto-approve tool actions without interactive confirmation.
+  * `--no-tools`: Run in pure conversational mode without tool execution capabilities.
   * `--claude`: Launch the Anthropic Claude Code terminal agent attached to Blackwell GPU.
   * `--hermes`: Launch the Nous Research Hermes terminal agent attached to Blackwell GPU.
   * `--think [full|compact|off]`: Reasoning display mode (Default: `full`).
     * `full`: Live thinking process box with token counter and stopwatch.
     * `compact`: Live pulse spinner collapsing into `💭 Thought for X.Xs (Y tokens)`.
     * `off`: Hides thinking process, rendering final answer directly.
-  * `--max-tokens <int>`: Maximum tokens to generate per response (Default: 1024).
+  * `--max-tokens <int>`: Maximum tokens to generate per response (Default: 2048).
   * `--temp <float>`: Sampling temperature (Default: 0.7).
   * `--model <str>`: Target model identifier (Auto-detected from pod's `/v1/models` if omitted).
   * `--system <str>`: Custom system prompt.
+* **Autonomous Workspace Tools:**
+  * `run_shell`: Execute bash commands with timeout control and ANSI stripping.
+  * `read_file`: Inspect files with 1-based line numbering and pagination.
+  * `edit_file`: Surgical search-and-replace block editing (Aider/Claude Code style).
+  * `write_file`: Create or overwrite files atomically with snapshot tracking.
+  * `list_dir`: Explore workspace folder layouts and file trees.
+  * `grep_search`: Fast text search across project workspace.
 * **Interactive Slash Commands:**
   * `/help`: Display command cheatsheet.
   * `/clear`: Clear conversation history and reset memory.
+  * `/undo`: Revert the last file modification made by the agent.
+  * `/diff`: Show git diff of uncommitted changes in the workspace.
+  * `/auto`: Toggle auto-approve mode (bypass confirmation prompts).
+  * `/context`: Show token estimate, cached turns, and tools state.
+  * `/tools`: List available workspace tools and their parameter schemas.
   * `/think [full|compact|off]`: Toggle thinking display mode dynamically.
   * `/gpu`: Query live Blackwell GPU telemetry (allocated VRAM, temperature, SM usage).
   * `/model`: Inspect active model ID, parameters, context window, and port.
