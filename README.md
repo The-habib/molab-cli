@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Jobs-SQLite%20DAG%20%26%20Batch%20Queue-orange.svg" alt="Jobs"></a>
   <a href="#"><img src="https://img.shields.io/badge/Persistence-100%25%20On--MoLab%20Vault%20%26%20Keepalive-emerald.svg" alt="Persistence"></a>
   <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(48%20Tools)-purple.svg" alt="MCP"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-178%20Passed%20(100%25)-success.svg" alt="Tests"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-179%20Passed%20(100%25)-success.svg" alt="Tests"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-Termux%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
@@ -37,7 +37,7 @@ Whether orchestrating 4K neural video enhancement pipelines, hosting 27B+ uncomp
 Running high-end GPU workloads in the cloud shouldn't mean juggling fragmented web consoles, manual SSH keys, and fragile browser uploads. Traditional cloud notebook interfaces break down when scripts run long, connections drop, or large datasets are transferred.
 
 `molab-cli` bridges that gap:
-- **Zero Terminal Buffer Bottlenecks:** Bypasses kernel PTY 4096-byte WebSocket limitations using direct Marimo HTTP/2 streaming endpoints (`/api/files/create` and `/api/files/download`) at line rate (80+ MB/s).
+- **Zero Terminal Buffer Bottlenecks:** Bypasses kernel PTY 4096-byte WebSocket limitations using direct Marimo HTTP/2 streaming endpoints (`/api/files/create` and `/api/files/download`) for full-bandwidth binary transfers.
 - **Safe Multi-Pod Coexistence:** Intelligently audits active GPU pods (`molab free`) to prevent accidental disruptions of running production jobs or inference servers.
 - **Autonomous Multi-Pod Batch Engine:** Features resource-aware dynamic GPU scheduling, DAG dependency resolution, transactional task leases, and isolated webhook delivery across multi-task pipelines (`molab batch`).
 - **Durable Background Job Engine:** Features a local SQLite job repository (`~/.config/molab/jobs.db`) with state machines, exit code traps, live log tailing, and automatic artifact discovery.
@@ -100,7 +100,7 @@ Provide AI agents in Cursor, Claude Desktop, and Antigravity with native capabil
 | Remote Kubernetes Sandbox Pod (Ubuntu 24.04 LTS, root)                        |
 |                                                                               |
 |   Port 8080: Marimo Server (PID 1)                                            |
-|     ├── /api/files/create   : Streaming multipart/form-data upload (80+ MB/s) |
+|     ├── /api/files/create   : Streaming multipart/form-data upload             |
 |     ├── /api/files/download : Binary streaming file download                  |
 |     ├── /api/status         : Kernel health & version metadata                |
 |     └── /terminal/ws        : Interactive PTY root bash shell                 |

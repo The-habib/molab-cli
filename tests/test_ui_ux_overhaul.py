@@ -137,3 +137,20 @@ def test_handle_cli_error_json(capsys):
     assert data["code"] == "TEST_CODE"
     assert data["message"] == "Test message"
     assert data["hint"] == "Test hint"
+
+
+def test_get_cached_free_pod():
+    from molab_cli.tui import _get_cached_free_pod, _FREE_POD_CACHE
+    mock_client = MagicMock()
+    
+    # Empty pods
+    assert _get_cached_free_pod(mock_client, {}) is None
+    
+    # Single pod
+    running = {"nb_1": "sb_1"}
+    assert _get_cached_free_pod(mock_client, running) == "nb_1"
+    
+    # Cached within TTL
+    running_multiple = {"nb_1": "sb_1", "nb_2": "sb_2"}
+    assert _get_cached_free_pod(mock_client, running_multiple) == "nb_1"
+

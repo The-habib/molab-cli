@@ -717,9 +717,10 @@ def action_ai_studio(client: MoLabClient) -> None:
         if not choice or "Back" in choice:
             break
 
-        running = client.list_running_sandboxes()
-        active_id = list(running.keys())[0] if running else None
-        if not active_id:
+        try:
+            from molab_cli.sandbox import resolve_target_notebook
+            active_id = resolve_target_notebook(client, require_running=True)
+        except Exception:
             nb = pick_notebook(client, "Select the notebook running your model server:")
             if not nb:
                 continue
@@ -907,6 +908,31 @@ def action_show_help() -> None:
     questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
 
 
+_FREE_POD_CACHE: Dict[str, Any] = {"pod_id": None, "timestamp": 0.0}
+
+
+def _get_cached_free_pod(client: MoLabClient, running_pods: Dict[str, str]) -> Optional[str]:
+    """Retrieve free pod recommendation with 60-second cache to keep main menu instantaneous."""
+    if not running_pods:
+        return None
+    now = time.time()
+    cached_id = _FREE_POD_CACHE.get("pod_id")
+    if now - _FREE_POD_CACHE.get("timestamp", 0.0) < 60.0 and cached_id in running_pods:
+        return cached_id
+
+    # If only 1 pod is running, use it directly without blocking the event loop
+    if len(running_pods) == 1:
+        single_id = list(running_pods.keys())[0]
+        _FREE_POD_CACHE["pod_id"] = single_id
+        _FREE_POD_CACHE["timestamp"] = now
+        return single_id
+
+    candidate = list(running_pods.keys())[0]
+    _FREE_POD_CACHE["pod_id"] = candidate
+    _FREE_POD_CACHE["timestamp"] = now
+    return candidate
+
+
 def start_interactive_tui() -> None:
     """Main interactive Control Center event loop."""
     if not ensure_authenticated():
@@ -920,17 +946,8 @@ def start_interactive_tui() -> None:
             running_pods = client.list_running_sandboxes()
             running_count = len(running_pods)
 
-            # Audit first free pod for status bar hint
-            free_pod_id = None
-            for nb_id in running_pods:
-                try:
-                    sess = SandboxSession(nb_id, client=client)
-                    wl = sess.get_workload_status()
-                    if not wl.get("is_occupied", False):
-                        free_pod_id = nb_id
-                        break
-                except Exception:
-                    pass
+            # Retrieve fast non-blocking free pod hint
+            free_pod_id = _get_cached_free_pod(client, running_pods)
 
             render_banner()
             render_status_bar(auth_info, running_pods_count=running_count, recommended_free_pod=free_pod_id)

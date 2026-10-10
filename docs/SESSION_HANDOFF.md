@@ -11,10 +11,10 @@
 
 The MoLab CLI (`molab` / `molabctl`) has completed an end-to-end UX, architectural, state-management, reliability, and documentation overhaul.
 * **Working Tree:** Clean, production-ready.
-* **Test Suite:** **178 passed / 178 tests (100% pass rate)** in `pytest`.
+* **Test Suite:** **179 passed / 179 tests (100% pass rate)** in `pytest`.
 * **CLI Surface:** 56 commands and command groups across pod lifecycle, 1-click model deployments, live telemetry profiling, terminal coding agents, public ingress, in-notebook vault persistence, and batch DAG orchestration.
 * **Zero-Friction Target Resolution:** Pod ID is optional across all commands; the CLI automatically resolves active pods, prompts in interactive sessions, and remembers the session pod.
-* **Interactive TUI:** Fully synchronized with all modern v2.4 capabilities (1-click catalog deployment, telemetry, virtual keys, public sharing).
+* **Interactive TUI:** Fully synchronized with all modern v2.4 capabilities (1-click catalog deployment, telemetry, virtual keys, public sharing) and non-blocking status bar caching (<0.5s menu render).
 
 ---
 
@@ -84,9 +84,10 @@ The MoLab CLI (`molab` / `molabctl`) has completed an end-to-end UX, architectur
 
 ## 5. Verification Results
 
-* **Full Test Run:** `pytest tests/` ➔ **178 passed, 1 warning in 9.23s**.
+* **Full Test Run:** `pytest tests/` ➔ **179 passed, 1 warning in 10.95s**.
 * **Zero Regressions:** All pre-existing 167 tests maintained and passing.
 * **Redaction Verified:** Zero credentials, cookies, or JWTs leaked in error outputs or test transcripts.
+* **Interactive TUI Verified:** Real Linux PTY harness verified clean navigation, menu rendering, and cancellation.
 
 ---
 
