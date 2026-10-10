@@ -20,7 +20,17 @@ from rich.table import Table
 from molab_cli.auth import inspect_auth_status
 from molab_cli.client import MoLabClient
 from molab_cli.config import get_client_cookie, set_client_cookie
-from molab_cli.sandbox import SandboxSession, LocalHttpForwarder
+from molab_cli.sandbox import SandboxSession, LocalHttpForwarder, resolve_target_notebook
+from molab_cli.theme import (
+    handle_cli_error,
+    render_error_card,
+    render_success_card,
+    render_warning_card,
+    render_info_card,
+    render_status_badge,
+    render_hw_badge,
+    render_page_header,
+)
 
 console = Console()
 
@@ -240,58 +250,70 @@ def cmd_create(code: Optional[str], blackwell: bool, cpu: int, memory: int, titl
 
 
 @cli.command("compute")
-@click.argument("notebook_id")
+@click.argument("notebook_id", required=False)
 @click.option("--blackwell/--cpu-only", "use_blackwell", default=True, help="Select NVIDIA RTX Pro 6000 Blackwell (96GB VRAM)")
 @click.option("--cpu", default=4, help="CPU cores")
 @click.option("--memory", default=32, help="Memory GiB")
-def cmd_compute(notebook_id: str, use_blackwell: bool, cpu: int, memory: int):
+def cmd_compute(notebook_id: Optional[str], use_blackwell: bool, cpu: int, memory: int):
     """Switch notebook compute resources to NVIDIA Blackwell or CPU."""
     client = MoLabClient()
+    try:
+        target_nb = resolve_target_notebook(client, notebook_id, require_running=False)
+    except Exception as e:
+        handle_cli_error(e, title="Compute Target Resolution Failed")
+        return
+
     gpu = "rtxp6000" if use_blackwell else ""
     gpu_cnt = 1 if use_blackwell else 0
     hw_label = "NVIDIA RTX Pro 6000 Blackwell (96GB VRAM)" if use_blackwell else "CPU Only"
 
     with console.status(f"[bold yellow]Configuring compute to {hw_label} and restarting sandbox...[/bold yellow]"):
         try:
-            res = client.update_compute(notebook_id, gpu=gpu, cpu=cpu, memory=memory, gpu_count=gpu_cnt)
+            res = client.update_compute(target_nb, gpu=gpu, cpu=cpu, memory=memory, gpu_count=gpu_cnt)
             console.print(f"[green]✔ Compute updated successfully![/green]")
             console.print(f"  [bold]Hardware:[/bold] {hw_label}")
             console.print(f"  [bold]CPU/Memory:[/bold] {cpu} Cores / {memory} GiB RAM")
             if res.get("new_sandbox_id"):
                 console.print(f"  [bold]New Sandbox Pod:[/bold] {res.get('new_sandbox_id')}")
         except Exception as e:
-            console.print(f"[red]Error updating compute:[/red] {e}")
+            handle_cli_error(e, title="Compute Update Failed")
 
 
 @cli.command("inspect")
-@click.argument("notebook_id")
+@click.argument("notebook_id", required=False)
 @click.option("-j", "--json", "as_json", is_flag=True, help="Output inspection as JSON")
-def cmd_inspect(notebook_id: str, as_json: bool):
+def cmd_inspect(notebook_id: Optional[str], as_json: bool):
     """Inspect notebook configuration, sandbox pod status, and hardware specs."""
     client = MoLabClient()
-    session = SandboxSession(notebook_id, client=client)
+    try:
+        target_nb = resolve_target_notebook(client, notebook_id, require_running=False)
+    except Exception as e:
+        handle_cli_error(e, title="Inspection Resolution Failed", as_json=as_json)
+        return
+
+    session = SandboxSession(target_nb, client=client)
 
     if not as_json:
         with console.status("[bold blue]Connecting to MoLab pod...[/bold blue]"):
             try:
-                info = client.inspect_notebook(notebook_id)
+                info = client.inspect_notebook(target_nb)
                 health = session.check_health()
             except Exception as e:
-                console.print(f"[red]Error inspecting notebook:[/red] {e}")
+                handle_cli_error(e, title="Error Inspecting Notebook", as_json=as_json)
                 return
     else:
         try:
-            info = client.inspect_notebook(notebook_id)
+            info = client.inspect_notebook(target_nb)
             health = session.check_health()
         except Exception as e:
-            print(json.dumps({"error": str(e)}))
+            handle_cli_error(e, title="Error Inspecting Notebook", as_json=True)
             return
 
     if as_json:
         print(json.dumps({"notebook": info, "health": health}, indent=2))
         return
 
-    table = Table(title=f"Notebook: {info['title']} ({notebook_id})", box=box.ROUNDED)
+    table = Table(title=f"Notebook: {info['title']} ({target_nb})", box=box.ROUNDED)
     table.add_column("Property", style="cyan")
     table.add_column("Value", style="magenta")
 
@@ -312,44 +334,73 @@ def cmd_inspect(notebook_id: str, as_json: bool):
 
 @cli.command("exec")
 @click.argument("notebook_id")
-@click.argument("command")
+@click.argument("command", required=False)
 @click.option("--timeout", default=30.0, help="Execution timeout in seconds")
-def cmd_exec(notebook_id: str, command: str, timeout: float):
+def cmd_exec(notebook_id: str, command: Optional[str], timeout: float):
     """Execute a bash command inside the remote CoreWeave sandbox container."""
-    session = SandboxSession(notebook_id)
+    client = MoLabClient()
+    if command is None:
+        actual_cmd = notebook_id
+        try:
+            target_nb = resolve_target_notebook(client, require_running=True)
+        except Exception as e:
+            handle_cli_error(e, title="Remote Execution Target Failed")
+            return
+    else:
+        actual_cmd = command
+        try:
+            target_nb = resolve_target_notebook(client, notebook_id, require_running=True)
+        except Exception as e:
+            handle_cli_error(e, title="Remote Execution Target Failed")
+            return
+
+    session = SandboxSession(target_nb, client=client)
     with console.status(f"[bold cyan]Executing on remote pod ({session.notebook_id})...[/bold cyan]"):
         try:
-            out = session.execute_command(command, timeout=timeout)
+            out = session.execute_command(actual_cmd, timeout=timeout)
             console.print(out, markup=False)
         except Exception as e:
-            from rich.markup import escape
-            console.print(f"[red]Remote execution failed:[/red] {escape(str(e))}")
+            handle_cli_error(e, title="Remote Execution Failed")
 
 
 @cli.command("shell")
-@click.argument("notebook_id")
-def cmd_shell(notebook_id: str):
+@click.argument("notebook_id", required=False)
+def cmd_shell(notebook_id: Optional[str]):
     """Open an interactive root bash terminal session directly in the CoreWeave pod."""
-    session = SandboxSession(notebook_id)
+    client = MoLabClient()
+    try:
+        target_nb = resolve_target_notebook(client, notebook_id, require_running=True)
+    except Exception as e:
+        handle_cli_error(e, title="Interactive Shell Failed")
+        return
+
+    session = SandboxSession(target_nb, client=client)
     console.print(f"[green]Connecting interactive terminal to {session.notebook_id}...[/green]")
     console.print("[dim]Press Ctrl+D or type 'exit' to disconnect.[/dim]\n")
     try:
         session.interactive_shell()
     except Exception as e:
-        console.print(f"[red]Interactive shell failed:[/red] {e}")
+        handle_cli_error(e, title="Interactive Shell Connection Failed")
 
 
 @cli.command("cat")
-@click.argument("notebook_id")
+@click.argument("notebook_id", required=False)
 @click.option("--cell", type=int, help="Cell index (1-indexed)")
-def cmd_cat(notebook_id: str, cell: Optional[int]):
+def cmd_cat(notebook_id: Optional[str], cell: Optional[int]):
     """Print Python code of notebook or specific cell."""
-    session = SandboxSession(notebook_id)
+    client = MoLabClient()
+    try:
+        target_nb = resolve_target_notebook(client, notebook_id, require_running=False)
+    except Exception as e:
+        handle_cli_error(e, title="Cell Code Retrieval Failed")
+        return
+
+    session = SandboxSession(target_nb, client=client)
     with console.status("[bold blue]Retrieving cells from sandbox...[/bold blue]"):
         try:
             cfg, cells = session.fetch_notebook_cells()
         except Exception as e:
-            console.print(f"[red]Error fetching cells:[/red] {e}")
+            handle_cli_error(e, title="Error Fetching Cells")
             return
 
     if cell is not None:
@@ -571,16 +622,22 @@ def cmd_free(as_json: bool):
 
 
 @cli.command("stop")
-@click.argument("notebook_id")
-def cmd_stop(notebook_id: str):
+@click.argument("notebook_id", required=False)
+def cmd_stop(notebook_id: Optional[str]):
     """Stop/Shutdown a running cloud sandbox container pod."""
     client = MoLabClient()
-    with console.status(f"[bold yellow]Stopping cloud sandbox for {notebook_id}...[/bold yellow]"):
+    try:
+        target_nb = resolve_target_notebook(client, notebook_id, require_running=True)
+    except Exception as e:
+        handle_cli_error(e, title="Stop Target Resolution Failed")
+        return
+
+    with console.status(f"[bold yellow]Stopping cloud sandbox for {target_nb}...[/bold yellow]"):
         try:
-            client.stop_notebook(notebook_id)
-            console.print(f"[green]✔ Cloud sandbox pod stopped for [bold]{notebook_id}[/bold][/green]")
+            client.stop_notebook(target_nb)
+            console.print(f"[green]✔ Cloud sandbox pod stopped for [bold]{target_nb}[/bold][/green]")
         except Exception as e:
-            console.print(f"[red]Stop failed:[/red] {e}")
+            handle_cli_error(e, title="Stop Pod Failed")
 
 
 @cli.command("delete")
@@ -603,49 +660,84 @@ def cmd_delete(notebook_id: str, yes: bool):
 
 
 @cli.command("push")
-@click.argument("notebook_id")
-@click.argument("local_file", type=click.Path(exists=True))
-@click.argument("remote_path", required=False)
+@click.argument("arg1")
+@click.argument("arg2", required=False)
+@click.argument("arg3", required=False)
 @click.option("-r", "--recursive", is_flag=True, help="Transfer directory recursively")
-def cmd_push(notebook_id: str, local_file: str, remote_path: Optional[str], recursive: bool):
+def cmd_push(arg1: str, arg2: Optional[str], arg3: Optional[str], recursive: bool):
     """Upload a local file or dataset directly into the CoreWeave container."""
-    session = SandboxSession(notebook_id)
-    with console.status(f"[bold cyan]Uploading {local_file} to pod...[/bold cyan]"):
+    client = MoLabClient()
+    try:
+        if arg3 is not None or (arg1.startswith("nb_") and arg2 is not None):
+            target_nb = resolve_target_notebook(client, arg1, require_running=True)
+            local_file = arg2
+            remote_path = arg3
+        else:
+            target_nb = resolve_target_notebook(client, require_running=True)
+            local_file = arg1
+            remote_path = arg2
+    except Exception as e:
+        handle_cli_error(e, title="Upload Target Resolution Failed")
+        return
+
+    session = SandboxSession(target_nb, client=client)
+    with console.status(f"[bold cyan]Uploading {local_file} to pod ({target_nb})...[/bold cyan]"):
         try:
             dest, size = session.push_file(local_file, remote_path, recursive=recursive)
-            console.print(f"[green]✔ Uploaded [bold]{local_file}[/bold] -> [bold]{dest}[/bold] ({size} bytes)[/green]")
+            console.print(f"[green]✔ Uploaded [bold]{local_file}[/bold] -> [bold]{dest}[/bold] ({size:,} bytes)[/green]")
         except Exception as e:
-            console.print(f"[red]Upload failed:[/red] {e}")
+            handle_cli_error(e, title="Upload Failed")
 
 
 @cli.command("pull")
-@click.argument("notebook_id")
-@click.argument("remote_path")
-@click.argument("local_file", required=False)
+@click.argument("arg1")
+@click.argument("arg2", required=False)
+@click.argument("arg3", required=False)
 @click.option("-r", "--recursive", is_flag=True, help="Transfer directory recursively")
-def cmd_pull(notebook_id: str, remote_path: str, local_file: Optional[str], recursive: bool):
+def cmd_pull(arg1: str, arg2: Optional[str], arg3: Optional[str], recursive: bool):
     """Download a file from the CoreWeave container to local storage."""
-    session = SandboxSession(notebook_id)
-    with console.status(f"[bold cyan]Downloading {remote_path} from pod...[/bold cyan]"):
+    client = MoLabClient()
+    try:
+        if arg3 is not None or (arg1.startswith("nb_") and arg2 is not None):
+            target_nb = resolve_target_notebook(client, arg1, require_running=True)
+            remote_path = arg2
+            local_file = arg3
+        else:
+            target_nb = resolve_target_notebook(client, require_running=True)
+            remote_path = arg1
+            local_file = arg2
+    except Exception as e:
+        handle_cli_error(e, title="Download Target Resolution Failed")
+        return
+
+    session = SandboxSession(target_nb, client=client)
+    with console.status(f"[bold cyan]Downloading {remote_path} from pod ({target_nb})...[/bold cyan]"):
         try:
             dest, size = session.pull_file(remote_path, local_file, recursive=recursive)
-            console.print(f"[green]✔ Downloaded [bold]{remote_path}[/bold] -> [bold]{dest}[/bold] ({size} bytes)[/green]")
+            console.print(f"[green]✔ Downloaded [bold]{remote_path}[/bold] -> [bold]{dest}[/bold] ({size:,} bytes)[/green]")
         except Exception as e:
-            console.print(f"[red]Download failed:[/red] {e}")
+            handle_cli_error(e, title="Download Failed")
 
 
 @cli.command("gpu")
-@click.argument("notebook_id")
+@click.argument("notebook_id", required=False)
 @click.option("-j", "--json", "as_json", is_flag=True, help="Output GPU telemetry as JSON")
-def cmd_gpu(notebook_id: str, as_json: bool):
+def cmd_gpu(notebook_id: Optional[str], as_json: bool):
     """Display real-time NVIDIA Blackwell GPU telemetry and VRAM utilization."""
-    session = SandboxSession(notebook_id)
+    client = MoLabClient()
+    try:
+        target_nb = resolve_target_notebook(client, notebook_id, require_running=True)
+    except Exception as e:
+        handle_cli_error(e, title="GPU Telemetry Target Failed", as_json=as_json)
+        return
+
+    session = SandboxSession(target_nb, client=client)
     if not as_json:
         with console.status("[bold green]Querying NVIDIA Blackwell GPU telemetry...[/bold green]"):
             try:
                 telemetry = session.get_gpu_telemetry()
             except Exception as e:
-                console.print(f"[red]Failed to query GPU telemetry:[/red] {e}")
+                handle_cli_error(e, title="Failed to query GPU telemetry", as_json=as_json)
                 return
     else:
         try:
@@ -653,14 +745,14 @@ def cmd_gpu(notebook_id: str, as_json: bool):
             print(json.dumps(telemetry, indent=2))
             return
         except Exception as e:
-            print(json.dumps({"error": str(e)}))
+            handle_cli_error(e, title="Failed to query GPU telemetry", as_json=True)
             return
 
     if not telemetry.get("cuda_available"):
         console.print(Panel(
             "[yellow]No NVIDIA GPU detected on this instance (Instance is in CPU-only mode).[/yellow]\n\n"
             f"To switch this notebook to NVIDIA Blackwell GPU:\n"
-            f"[bold green]molabctl compute {notebook_id} --blackwell[/bold green]",
+            f"[bold green]molab compute {target_nb} --blackwell[/bold green]",
             title="GPU Telemetry",
             border_style="yellow"
         ))
@@ -703,17 +795,24 @@ def cmd_install(notebook_id: str, packages: tuple):
 
 
 @cli.command("forward")
-@click.argument("notebook_id")
+@click.argument("notebook_id", required=False)
 @click.option("--port", default=8000, help="Local port to bind on localhost (default 8000)")
-def cmd_forward(notebook_id: str, port: int):
+def cmd_forward(notebook_id: Optional[str], port: int):
     """Bridge local HTTP port (localhost:8000) directly to the cloud model server."""
-    session = SandboxSession(notebook_id)
+    client = MoLabClient()
+    try:
+        target_nb = resolve_target_notebook(client, notebook_id, require_running=True)
+    except Exception as e:
+        handle_cli_error(e, title="Bridge Target Resolution Failed")
+        return
+
+    session = SandboxSession(target_nb, client=client)
     with console.status("[bold green]Verifying remote model server on Blackwell pod...[/bold green]"):
         try:
             if not session.ensure_model_server_running():
                 console.print("[yellow]Warning: Model server did not report healthy. Proceeding anyway...[/yellow]")
         except Exception as e:
-            console.print(f"[red]Error verifying server:[/red] {e}")
+            console.print(f"[yellow]Note verifying server:[/yellow] {e}")
 
     forwarder = LocalHttpForwarder(session, port=port)
     console.print(Panel(
@@ -721,9 +820,9 @@ def cmd_forward(notebook_id: str, port: int):
         f"• Local OpenAI Base URL: [bold cyan]http://localhost:{port}/v1[/bold cyan]\n"
         f"• Chat Completions:     [bold cyan]http://localhost:{port}/v1/chat/completions[/bold cyan]\n"
         f"• Model Health Check:   [bold cyan]http://localhost:{port}/health[/bold cyan]\n"
-        f"• Deployed Model:       [bold green]gemma-3-27b-it-abliterated (Uncompressed BF16)[/bold green]\n"
-        f"• Cloud Hardware:       [bold green]NVIDIA RTX PRO 6000 Blackwell (95GB VRAM)[/bold green]\n\n"
-        f"[dim]You can now use curl, Python 'openai' client, Open WebUI, or SillyTavern pointing to http://localhost:{port}/v1[/dim]\n"
+        f"• Cloud Hardware:       [bold green]NVIDIA RTX PRO 6000 Blackwell (96GB VRAM, sm_120)[/bold green]\n"
+        f"• Target Pod:           [bold cyan]{target_nb}[/bold cyan]\n\n"
+        f"[dim]You can now use curl, Python 'openai' client, Cursor, Claude Code, or Open WebUI pointing to http://localhost:{port}/v1[/dim]\n"
         f"[dim]Press [bold]Ctrl+C[/bold] to stop the forwarder.[/dim]",
         title="MoLab Localhost Bridge",
         border_style="green",
@@ -732,6 +831,8 @@ def cmd_forward(notebook_id: str, port: int):
         forwarder.start()
     except KeyboardInterrupt:
         console.print("\n[dim]Forwarder stopped.[/dim]")
+    except Exception as e:
+        handle_cli_error(e, title="Forwarder Runtime Error")
 
 
 @cli.group("bridge")

@@ -49,10 +49,14 @@ BANNER_ASCII = r"""
 """
 
 
+from molab_cli import __version__
+from molab_cli.exceptions import classify_exception, redact_sensitive_text
+
+
 def render_banner(subtitle: str = "Cloud GPU Orchestration & Blackwell AI Hub") -> None:
     """Print the stylized MoLab header banner."""
     title_text = Text(BANNER_ASCII, style="bold cyan")
-    sub_text = Text(f"\n   ⚡ {subtitle}  •  v2.3.1\n   🚀 NVIDIA RTX PRO 6000 (96GB VRAM)  •  CoreWeave Fabric", style="bold #76b900")
+    sub_text = Text(f"\n   ⚡ {subtitle}  •  v{__version__}\n   🚀 NVIDIA RTX PRO 6000 (96GB VRAM)  •  CoreWeave Fabric", style="bold #76b900")
     content = Text.assemble(title_text, sub_text)
     console.print(Panel(
         content,
@@ -97,10 +101,46 @@ def render_status_bar(
     console.print(Panel(grid, border_style="dim cyan", padding=(0, 1)))
 
 
-def render_error_card(title: str, message: str, hint: Optional[str] = None) -> None:
-    """Render an eye-catching error card with suggestions."""
+def render_status_badge(is_running: bool, is_free: Optional[bool] = None) -> str:
+    """Standardized status badge for tables and selectors."""
+    if not is_running:
+        return "[dim]⚪ STOPPED[/dim]"
+    if is_free is True:
+        return "[bold bright_green]🟢 ★ FREE[/bold bright_green]"
+    elif is_free is False:
+        return "[bold yellow]🟡 ⚠️ OCCUPIED[/bold yellow]"
+    return "[bold green]🟢 RUNNING[/bold green]"
+
+
+def render_hw_badge(gpu: str) -> str:
+    """Standardized compute hardware badge."""
+    g = (gpu or "").lower()
+    if "rtx" in g or "blackwell" in g:
+        return "[bold #76b900]⚡ Blackwell 96GB[/bold #76b900]"
+    return "[cyan]🖥️ 4 vCPU / 32GB[/cyan]"
+
+
+def render_page_header(title: str, subtitle: Optional[str] = None) -> None:
+    """Render a structured header for subcommands and views."""
+    t = Text()
+    t.append(f"{title}\n", style="bold cyan")
+    if subtitle:
+        t.append(subtitle, style="dim white")
+    console.print(Panel(t, border_style="cyan", padding=(0, 2)))
+
+
+def render_error_card(
+    title: str,
+    message: str,
+    hint: Optional[str] = None,
+    code: Optional[str] = None,
+) -> None:
+    """Render an eye-catching error card with suggestions and redacted secrets."""
+    sanitized_msg = redact_sensitive_text(message)
     body = Text()
-    body.append(f"{message}\n", style="white")
+    if code:
+        body.append(f"[{code}] ", style="bold red")
+    body.append(f"{sanitized_msg}\n", style="white")
     if hint:
         body.append(f"\n💡 Suggested Action:\n", style="bold yellow")
         body.append(f"  {hint}\n", style="dim yellow")
@@ -116,7 +156,7 @@ def render_error_card(title: str, message: str, hint: Optional[str] = None) -> N
 def render_success_card(title: str, message: str) -> None:
     """Render a celebratory success card."""
     console.print(Panel(
-        Text(message, style="white"),
+        Text(redact_sensitive_text(message), style="white"),
         title=f"[bold green]✨ {title}[/bold green]",
         border_style="green",
         padding=(1, 2),
@@ -126,7 +166,7 @@ def render_success_card(title: str, message: str) -> None:
 def render_warning_card(title: str, message: str) -> None:
     """Render a warning card."""
     console.print(Panel(
-        Text(message, style="white"),
+        Text(redact_sensitive_text(message), style="white"),
         title=f"[bold yellow]⚠️ {title}[/bold yellow]",
         border_style="yellow",
         padding=(1, 2),
@@ -136,8 +176,36 @@ def render_warning_card(title: str, message: str) -> None:
 def render_info_card(title: str, message: str) -> None:
     """Render an informational card."""
     console.print(Panel(
-        Text(message, style="white"),
+        Text(redact_sensitive_text(message), style="white"),
         title=f"[bold cyan]ℹ️ {title}[/bold cyan]",
         border_style="cyan",
         padding=(1, 2),
     ))
+
+
+def handle_cli_error(
+    e: Exception,
+    title: str = "Command Execution Failed",
+    as_json: bool = False,
+) -> None:
+    """Unified error handler for all CLI commands.
+    
+    Classifies exception, sanitizes secrets, and formats either as JSON or as a Rich card.
+    """
+    import json
+    import sys
+    err = classify_exception(e)
+
+    if as_json:
+        data = err.to_dict()
+        print(json.dumps(data, indent=2))
+        sys.exit(1)
+
+    render_error_card(
+        title=title,
+        message=err.message,
+        hint=err.hint,
+        code=err.code,
+    )
+    sys.exit(1)
+

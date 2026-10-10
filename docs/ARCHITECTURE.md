@@ -229,6 +229,50 @@ Ephemeral cloud pods on CoreWeave impose a dual constraint:
 - The pod container pre-installs `/usr/bin/rclone` and `/usr/local/bin/huggingface-cli`.
 - `StorageBridge` allows agents and users to sync `/workspace` directly to remote object storage (Cloudflare R2, AWS S3, Backblaze B2, Google Cloud Storage) at 10Gbps+ data center speeds without consuming phone storage.
 
+---
+
+## 9. Enterprise AI Model Serving & Gateway Control Plane (v2.4)
+
+MoLab CLI features an integrated self-hosted inference engine on Blackwell:
+* **1-Click Model Deployer (`deploy.py`):** Automatically chooses Blackwell hyperparameters (FlashInfer, chunked prefill, 16-token APC radix caching, NVFP4/FP8 KV cache), launches background supervisor guardians, and establishes local bridge forwarding.
+* **Inference Telemetry Profiler (`perf.py`):** Queries live vLLM Prometheus metrics to compute live Automatic Prefix Caching (APC) hit rates %, Time To First Token (TTFT), KV cache memory geometry, and Blackwell GPU thermals.
+* **AI Gateway Control Plane (`gateway_db.py`, `rate_limiter.py`):** Virtual API keys (`sk-molab-...`), token metering, sliding-window RPM/TPM rate limits, and audit logs stored in SQLite WAL mode.
+* **Ingress & Tunnels (`tunnel.py`):** Client-side Cloudflare Quick Tunnels exposing endpoints to external clients (Cursor, Claude Code, Python) with SSE keep-alive comments (`: keep-alive\n\n`) bypassing proxy timeouts.
+
+---
+
+## 10. Intelligent Target Auto-Resolution Architecture
+
+To eliminate friction in interactive terminal workflows:
+* **`resolve_target_notebook()` (`sandbox.py`):**
+  - If a notebook ID is provided, validates and stores it as the active session pod in `~/.config/molab/config.json`.
+  - If omitted in a single-pod workspace, automatically selects the running pod.
+  - If omitted in a multi-pod workspace, prompts interactively with arrow keys in TTY sessions, or exits with a clean error in automated pipelines.
+  - Commands (`gpu`, `shell`, `exec`, `forward`, `inspect`, `stop`, `cat`, `push`, `pull`) support optional notebook arguments seamlessly.
+
+---
+
+## 11. Unified Error Classification & Secret Redaction
+
+* **`classify_exception()` (`exceptions.py`):** Maps arbitrary lower-level HTTP errors, socket timeouts, and connection errors to structured `MoLabError` subclasses with actionable remediation hints.
+* **`redact_sensitive_text()` (`exceptions.py`):** Sanitizes cookies, session tokens, JWTs, and virtual API keys before rendering.
+* **`handle_cli_error()` (`theme.py`):** Renders dual output: Rich cards with error codes for TTY and clean JSON schemas for `--json` scriptable pipelines.
+
+---
+
+## 12. Documentation Index
+
+For deep-dive documentation, see:
+* [`USER_GUIDE.md`](./USER_GUIDE.md): Step-by-step developer workflows.
+* [`CLI_REFERENCE.md`](./CLI_REFERENCE.md): Full command-line manual.
+* [`UI_AND_UX.md`](./UI_AND_UX.md): Terminal design tokens, layouts, and pipe safety.
+* [`STATE_MANAGEMENT.md`](./STATE_MANAGEMENT.md): 5 state tiers and SQLite WAL persistence.
+* [`ERROR_HANDLING.md`](./ERROR_HANDLING.md): Exception hierarchy and secret redaction.
+* [`TESTING.md`](./TESTING.md): Verification strategy and test suite documentation.
+* [`DECISIONS.md`](./DECISIONS.md): Architecture Decision Records (ADR-001 through ADR-008).
+* [`SESSION_HANDOFF.md`](./SESSION_HANDOFF.md): Authoritative engineering session handoff.
+
+
 
 
 

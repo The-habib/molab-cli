@@ -23,6 +23,87 @@ from typing import Any, Dict, List, Optional, Tuple
 import websockets
 
 from molab_cli.client import MoLabClient
+from molab_cli.config import get_active_notebook_id, set_active_notebook_id
+from molab_cli.exceptions import MissingPodError, SandboxOfflineError
+
+
+def resolve_target_notebook(
+    client: Optional[MoLabClient] = None,
+    notebook_id: Optional[str] = None,
+    interactive: bool = True,
+    require_running: bool = True,
+) -> str:
+    """Intelligently resolve target notebook ID without requiring manual copy-pasting.
+    
+    1. If notebook_id is provided, validates and stores as active.
+    2. If omitted, checks the currently active/saved notebook.
+    3. If none or stopped, queries running pods. If exactly 1 pod is running, uses it.
+    4. If multiple pods run and terminal is interactive (TTY), prompts with arrow keys.
+    5. Otherwise raises an actionable MissingPodError or SandboxOfflineError.
+    """
+    c = client or MoLabClient()
+
+    if notebook_id:
+        clean_id = notebook_id if notebook_id.startswith("nb_") else f"nb_{notebook_id}"
+        set_active_notebook_id(clean_id)
+        return clean_id
+
+    # Check currently active saved ID
+    saved_id = get_active_notebook_id()
+
+    # Query running sandboxes
+    try:
+        running = c.list_running_sandboxes()
+    except Exception:
+        running = {}
+
+    if saved_id and require_running and saved_id in running:
+        return saved_id
+    elif saved_id and not require_running:
+        return saved_id
+
+    if len(running) == 1:
+        single_id = list(running.keys())[0]
+        set_active_notebook_id(single_id)
+        return single_id
+
+    if len(running) > 1:
+        if interactive and sys.stdin.isatty():
+            try:
+                from molab_cli.tui import pick_notebook
+                picked = pick_notebook(c, "Select running Blackwell pod:")
+                if picked and picked.get("id"):
+                    sel_id = picked["id"]
+                    set_active_notebook_id(sel_id)
+                    return sel_id
+            except Exception:
+                pass
+        running_list = ", ".join(running.keys())
+        raise MissingPodError(
+            message=f"Multiple pods are currently running: {running_list}.",
+            hint=f"Specify target pod explicitly: molab <command> {list(running.keys())[0]}",
+        )
+
+    # No running pods found
+    if not require_running:
+        try:
+            nbs = c.list_notebooks()
+            if nbs:
+                if len(nbs) == 1:
+                    return nbs[0]["id"]
+                if interactive and sys.stdin.isatty():
+                    from molab_cli.tui import pick_notebook
+                    picked = pick_notebook(c, "Select notebook:")
+                    if picked and picked.get("id"):
+                        return picked["id"]
+        except Exception:
+            pass
+
+    raise SandboxOfflineError(
+        notebook_id=saved_id or "unknown",
+        message="No active CoreWeave Blackwell pod is currently running.",
+        hint="Start a pod using: molab compute <notebook_id> --blackwell  or launch a new pod via: molab create",
+    )
 
 
 class SandboxSession:
@@ -44,7 +125,11 @@ class SandboxSession:
         info = self.client.inspect_notebook(self.notebook_id)
         session_b64 = info.get("session_token_b64")
         if not session_b64:
-            raise RuntimeError(f"Could not locate active sandbox session for {self.notebook_id}")
+            raise SandboxOfflineError(
+                notebook_id=self.notebook_id,
+                message=f"Cloud pod for notebook '{self.notebook_id}' is offline or stopped.",
+                hint=f"Start the pod on Blackwell with: molab compute {self.notebook_id} --blackwell",
+            )
 
         token_obj = None
         try:

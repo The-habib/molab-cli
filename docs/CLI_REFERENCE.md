@@ -218,6 +218,78 @@ Launch an industry-grade autonomous terminal coding agent powered by NVIDIA RTX 
   * `/exit`, `/quit`: Clean exit.
 * **Keyboard Shortcuts:**
   * `Ctrl+C`: Cleanly cancels active model generation without exiting the session.
+
+### `molab deploy [model_alias] [OPTIONS]`
+1-Click autonomous model deployment engine configured for NVIDIA RTX PRO 6000 Blackwell (96GB GDDR7 VRAM, sm_120). Automatically applies hyper-tuned Blackwell flags (FlashInfer, chunked prefill, 16-token APC radix caching), launches background supervisor, establishes local bridge, and prints ready-to-use credentials.
+* **Arguments:**
+  * `[model_alias]`: Friendly alias: `qwen-32b`, `coder-32b`, `r1-32b`, `llama-70b` (Default: `qwen-32b`).
+* **Options:**
+  * `--pod <notebook_id>`: Target pod ID (Auto-discovered if omitted).
+  * `--token <str>`: Cloudflare Tunnel token for persistent custom domain.
+  * `--no-tunnel`: Disable public tunnel (localhost:8000 only).
+  * `-j, --json`: Output deployment result as JSON.
+* **Example:**
+  ```bash
+  molab deploy coder-32b
+  molab deploy llama-70b
+  ```
+
+### `molab perf [notebook_id]`
+Profile self-hosted model performance in real time directly from the vLLM engine and Blackwell GPU sensors.
+* **Arguments:**
+  * `[notebook_id]`: Target pod ID (Optional; auto-resolved if omitted).
+* **Options:**
+  * `-j, --json`: Output metrics as machine-readable JSON.
+* **Metrics Reported:**
+  * **Automatic Prefix Caching (APC) Hit Rate %**: Ratio of tokens fetched from cache vs recomputed.
+  * **Time To First Token (TTFT)**: Live latency on prompt evaluation.
+  * **KV Cache VRAM Allocation**: GPU memory geometry and batch utilization.
+  * **Blackwell Hardware Stats**: VRAM used, wattage, GPU temperature, and SM allocation.
+* **Example:**
+  ```bash
+  molab perf
+  molab perf --json
+  ```
+
+### `molab share` (Alias: `molab public`)
+Expose your self-hosted model endpoint to the global internet via Cloudflare Tunnels with SSE keep-alive protection.
+* **Options:**
+  * `--port <number>`: Local bridge port to expose (Default: 8000).
+  * `--token <str>`: Persistent Named Tunnel token.
+  * `--status`: Check status and credentials of active tunnel.
+  * `--stop`: Terminate active public tunnel daemon.
+  * `-j, --json`: Output credentials as JSON.
+* **Example:**
+  ```bash
+  molab share
+  molab share --status
+  molab share --stop
+  ```
+
+### `molab keys <create|list|revoke>`
+AI Gateway multi-tenant virtual API key governance stored in SQLite WAL (`~/.config/molab/gateway.db`).
+* **Subcommands:**
+  * `molab keys create --name <client_name> [--rpm <N>] [--tpm <N>]`: Mint a new `sk-molab-...` virtual key with rate limits.
+  * `molab keys list`: List all active keys, tenants, limits, and statuses.
+  * `molab keys revoke <api_key>`: Revoke an existing virtual key immediately.
+* **Example:**
+  ```bash
+  molab keys create --name cursor-ide --rpm 60
+  molab keys list
+  molab keys revoke sk-molab-live-12345
+  ```
+
+### `molab stats` (Alias: `molab analytics`)
+Real-time gateway analytics auditing token metering, request volume, TTFT, and latency across all model sessions.
+* **Options:**
+  * `--limit <number>`: Maximum recent requests to display (Default: 20).
+  * `-j, --json`: Output analytics summary as JSON.
+* **Example:**
+  ```bash
+  molab stats
+  molab stats --json
+  ```
+
 * **Example:**
   ```bash
   # Launch with auto-discovered Blackwell pod:

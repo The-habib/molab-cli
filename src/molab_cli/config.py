@@ -36,6 +36,17 @@ def save_config(cfg: Dict[str, Any]) -> None:
         json.dump(cfg, f, indent=2)
 
 
+def get_config_dir() -> Path:
+    """Return the configuration directory path, ensuring it exists."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    return CONFIG_DIR
+
+
+def get_db_path(name: str) -> Path:
+    """Return the absolute path to a SQLite database in the config dir."""
+    return get_config_dir() / name
+
+
 def get_client_cookie() -> str:
     """Retrieve the persistent Clerk __client cookie."""
     return load_config().get("client_cookie", "")
@@ -56,3 +67,26 @@ def get_session_id() -> str:
 def get_org_id() -> str:
     """Retrieve the active organization ID."""
     return load_config().get("org_id", DEFAULT_ORG_ID)
+
+
+def get_active_notebook_id() -> Optional[str]:
+    """Retrieve the last active / selected notebook ID from config."""
+    return load_config().get("active_notebook_id")
+
+
+def set_active_notebook_id(nb_id: str) -> None:
+    """Persist the active notebook ID in config for zero-typing follow-up commands."""
+    if not nb_id:
+        return
+    clean_id = nb_id if nb_id.startswith("nb_") else f"nb_{nb_id}"
+    cfg = load_config()
+    cfg["active_notebook_id"] = clean_id
+    save_config(cfg)
+
+
+def clear_active_notebook_id() -> None:
+    """Clear the active notebook ID from config."""
+    cfg = load_config()
+    if "active_notebook_id" in cfg:
+        del cfg["active_notebook_id"]
+        save_config(cfg)

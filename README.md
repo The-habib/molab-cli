@@ -9,14 +9,14 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Architecture-Cloud--Native%20TUI%20%26%20CLI-blue.svg" alt="Architecture"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Engine-Anti--Idle%20%26%20Multi--Pod%20Orchestrator%20v2.3-0ea5e9.svg" alt="Orchestration"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Version-v2.4.0-blue.svg" alt="Version"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Engine-Anti--Idle%20%26%20Multi--Pod%20Orchestrator%20v2.4-0ea5e9.svg" alt="Orchestration"></a>
   <a href="#"><img src="https://img.shields.io/badge/GPU-NVIDIA%20Blackwell%20(96GB%20VRAM)-76b900.svg" alt="GPU"></a>
   <a href="#"><img src="https://img.shields.io/badge/Transfer-Native%20HTTP%2F2%20Streaming-success.svg" alt="File Transfer"></a>
   <a href="#"><img src="https://img.shields.io/badge/Jobs-SQLite%20DAG%20%26%20Batch%20Queue-orange.svg" alt="Jobs"></a>
   <a href="#"><img src="https://img.shields.io/badge/Persistence-100%25%20On--MoLab%20Vault%20%26%20Keepalive-emerald.svg" alt="Persistence"></a>
   <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(48%20Tools)-purple.svg" alt="MCP"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-101%20Passed%20(100%25)-success.svg" alt="Tests"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-178%20Passed%20(100%25)-success.svg" alt="Tests"></a>
   <a href="#"><img src="https://img.shields.io/badge/Platform-Termux%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
@@ -578,13 +578,30 @@ if status["status"] == "COMPLETED":
 
 ## 📚 Complete Studio-Grade Documentation Suite
 
-- 🐍 **[Python SDK API Reference](docs/API_REFERENCE.md)**: Exhaustive reference for `MoLabSDK`, `Pod`, `MoLabVault`, `KeepaliveManager`, `GalleryManager`, `BatchOrchestrator`, and `MarimoBackendClient`.
+### Core Engineering & Product Manuals
+- 🚀 **[End-to-End User Guide](docs/USER_GUIDE.md)**: Developer workflows, zero-friction pod targeting, 1-click model deployments, and background batch jobs.
+- 🎨 **[Terminal UI & Design System](docs/UI_AND_UX.md)**: OLED Slate design tokens, status/hardware badges, layout composition, and non-interactive pipe safety.
+- 💾 **[State Management & Data Architecture](docs/STATE_MANAGEMENT.md)**: 5-tier state architecture, transactional SQLite WAL durability, and caching contracts.
+- 🛡️ **[Error Taxonomy & Remediation](docs/ERROR_HANDLING.md)**: Typed `MoLabError` hierarchy, dynamic exception classification, and zero-leak secret redaction.
+- 🧪 **[Testing & Reliability Guide](docs/TESTING.md)**: Deterministic mocking architecture, test matrix, and continuous verification guidelines.
+- 🏛️ **[Technical Architecture & Protocols](docs/ARCHITECTURE.md)**: Network topology, Starlette REST acceleration, Clerk auto-minting, and system subsystems.
+- 📜 **[Architectural Decision Records (ADRs)](docs/DECISIONS.md)**: Rationale and trade-offs for ADR-001 through ADR-008.
+- 🤝 **[Autonomous Session Handoff](docs/SESSION_HANDOFF.md)**: Active state markers, verification checklists, and continuity contracts for autonomous agents.
+
+### AI Infrastructure & Serving
+- ⚡ **[60-Second 1-Click Deployment](docs/QUICKSTART_NON_TECH.md)**: Fast-track model serving with automated bridge and client setups.
+- 🤖 **[Blackwell 96GB Model Catalog](docs/MODEL_CATALOG_CONFIGS.md)**: Category-wise Blackwell hyperparameters, geometry profiles, and vLLM launch commands.
+- 🚀 **[Inference Engine Optimization](docs/INFERENCE_ENGINE_OPTIMIZATION.md)**: Kernel dispatch, FlashInfer, Prefix Caching (APC), Chunked Prefill, and memory geometry.
+- 🌐 **[Tunneling & Ingress Architecture](docs/TUNNELING_AND_INGRESS.md)**: Cloudflare Quick & Named Tunnels, SSE keep-alives, CORS, and Cursor/Claude Code setups.
+- 🔐 **[Gateway, Security & Telemetry](docs/GATEWAY_AND_SECURITY.md)**: Virtual key governance (`sk-molab-...`), SQLite WAL rate limiting, and Prometheus metrics.
+
+### Automation, Workloads & Reference
+- 🐍 **[Python SDK API Reference](docs/API_REFERENCE.md)**: Exhaustive reference for `MoLabSDK`, `Pod`, `MoLabVault`, `KeepaliveManager`, `GalleryManager`, and `BatchOrchestrator`.
 - 🤖 **[Model Context Protocol (MCP) Guide](docs/MCP_GUIDE.md)**: Complete guide to all 48 typed tools with schemas, agent workflows, and Claude/Cursor configurations.
 - 🛡️ **[Permanence & Keepalive Guide](docs/PERMANENCE_GUIDE.md)**: Architecture of the 100% on-MoLab vault, in-pod guard, and dual-loop anti-idle supervisor.
 - ⚡ **[Multi-Pod Batch Orchestration](docs/BATCH_ORCHESTRATION.md)**: DAG pipeline scheduling, dynamic worker pools, retries, and matrix parameter sweeps.
 - 🍳 **[Production Workload Cookbook](docs/WORKLOAD_COOKBOOK.md)**: Battle-tested recipes for Real-ESRGAN 4K remastering, vLLM / Ollama serving, Whisper transcription, LoRA fine-tuning, and SDXL.
 - 📖 **[Command-Line Reference](docs/CLI_REFERENCE.md)**: Full manual covering all 16 command groups and flags.
-- 🏛️ **[Technical Architecture & Protocols](docs/ARCHITECTURE.md)**: Deep dive into network gateways, Starlette REST acceleration, and Clerk auto-minting.
 - 🤖 **[Autonomous Agent Guide](docs/AGENT_GUIDE.md)**: Operational rules, memory safeguards, and safety runbooks for AI coding agents.
 - 🔧 **[Troubleshooting Runbook](docs/TROUBLESHOOTING.md)**: Diagnosing Clerk 401s, WebSocket disconnects, and OOM exceptions.
 

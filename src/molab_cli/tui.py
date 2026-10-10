@@ -10,11 +10,13 @@ import time
 from typing import Any, Dict, List, Optional
 
 import questionary
+from rich import box
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.markdown import Markdown
 
+from molab_cli import __version__
 from molab_cli.auth import inspect_auth_status, save_and_verify_auth
 from molab_cli.backend import MarimoBackendClient
 from molab_cli.client import MoLabClient
@@ -694,13 +696,18 @@ def action_file_transfer(client: MoLabClient) -> None:
 
 
 def action_ai_studio(client: MoLabClient) -> None:
-    """Dedicated AI Model Studio submenu."""
+    """Dedicated Blackwell AI Model Studio & Control Center submenu."""
     while True:
         choice = questionary.select(
-            "🤖 AI Model Studio (27B Gemma 3 Abliterated):",
+            "🤖 AI Model Studio & Autonomous Agent Hub:",
             choices=[
-                "💬 Terminal Chat with Deployed 27B Model (Instant Conversation)",
-                "🌐 Start Localhost Bridge (Expose http://localhost:8000/v1)",
+                "🚀 1-Click Deploy Production Model (Qwen 32B / DeepSeek R1 / Llama 70B)",
+                "💬 Terminal Coding Agent (Autonomous Tool Calling Loop)",
+                "🌐 Start Unified Blackwell AI Bridge (Hermes on 8000 & Claude on 8082)",
+                "📊 Live Inference Telemetry Profiler (Prefix Caching & GPU Thermals)",
+                "🌍 Share Model Endpoint (Zero-Config Cloudflare Public Tunnel)",
+                "🔑 Manage Gateway Virtual API Keys (RPM/TPM Limits)",
+                "📈 Real-Time Gateway Analytics & Audit Logs",
                 "🩺 Check Model Health & VRAM Status",
                 "⬅️ Back to Main Menu",
             ],
@@ -718,10 +725,97 @@ def action_ai_studio(client: MoLabClient) -> None:
                 continue
             active_id = nb["id"]
 
-        if "Terminal Chat" in choice:
+        if "1-Click Deploy" in choice:
+            model_alias = questionary.select(
+                "Select model profile to deploy on Blackwell 96GB:",
+                choices=[
+                    "qwen-32b    (Qwen 2.5 32B Instruct Abliterated - 32K Context)",
+                    "coder-32b   (Qwen 2.5 Coder 32B Instruct - 64K Context Workhorse)",
+                    "r1-32b      (DeepSeek R1 Distill Qwen 32B - Reasoning CoT)",
+                    "llama-70b   (Llama 3.3 70B Instruct FP8 - High Precision)",
+                ],
+                style=QUESTIONARY_STYLE,
+            ).ask()
+            if model_alias:
+                alias = model_alias.split()[0]
+                from molab_cli.deploy import deploy_model_on_pod
+                with console.status(f"[bold green]Deploying {alias} to Blackwell pod...[/bold green]"):
+                    try:
+                        res = deploy_model_on_pod(model_alias=alias, pod_id=active_id)
+                        render_success_card("Model Deployed!", f"Model: {res['model_id']}\nEndpoint: {res['local_url']}\nAPI Key: {res['api_key']}")
+                    except Exception as e:
+                        render_error_card("Deployment Failed", str(e))
+                questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
+
+        elif "Terminal Coding Agent" in choice:
             action_terminal_chat(active_id)
-        elif "Start Localhost Bridge" in choice:
+
+        elif "Start Unified Blackwell AI Bridge" in choice:
             action_localhost_bridge(active_id)
+
+        elif "Live Inference Telemetry" in choice:
+            from molab_cli.perf import query_pod_performance, render_performance_dashboard
+            with console.status("[bold cyan]Querying inference telemetry from Blackwell pod...[/bold cyan]"):
+                try:
+                    data = query_pod_performance(notebook_id=active_id)
+                    render_performance_dashboard(data)
+                except Exception as e:
+                    render_error_card("Telemetry Error", str(e))
+            questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
+
+        elif "Share Model Endpoint" in choice:
+            from molab_cli.tunnel import TunnelManager, render_credentials
+            mgr = TunnelManager()
+            st = mgr.get_status()
+            if st.get("active"):
+                render_credentials(st)
+                stop_it = questionary.confirm("Tunnel is running. Stop public sharing?", default=False, style=QUESTIONARY_STYLE).ask()
+                if stop_it:
+                    mgr.stop_tunnel()
+                    render_success_card("Tunnel Stopped", "Public tunnel has been terminated.")
+            else:
+                with console.status("[bold cyan]Starting Cloudflare Quick Tunnel...[/bold cyan]"):
+                    try:
+                        tun = mgr.start_quick_tunnel(local_port=8000)
+                        render_credentials(tun)
+                    except Exception as e:
+                        render_error_card("Tunnel Failed", str(e))
+            questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
+
+        elif "Manage Gateway Virtual API Keys" in choice:
+            from molab_cli.gateway_db import GatewayDB
+            db = GatewayDB()
+            keys = db.list_keys()
+            console.print(f"[bold cyan]Active Gateway Virtual Keys ({len(keys)}):[/bold cyan]")
+            for k in keys:
+                console.print(f"  • [bold white]{k['key']}[/bold white] | Name: {k['name']} | RPM: {k['rpm_limit']} | Status: {k['status']}")
+            sub = questionary.select("Key Action:", choices=["➕ Issue New Virtual Key", "🗑️ Revoke Key", "⬅️ Back"], style=QUESTIONARY_STYLE).ask()
+            if sub and "Issue New" in sub:
+                kname = questionary.text("Key Name / Tenant (e.g. cursor-ide):", default="dev-client", style=QUESTIONARY_STYLE).ask()
+                if kname:
+                    new_k = db.create_key(name=kname)
+                    render_success_card("Virtual Key Created!", f"Key: {new_k['key']}\nTenant: {kname}")
+            elif sub and "Revoke" in sub:
+                kto_rev = questionary.text("Enter API key to revoke:", style=QUESTIONARY_STYLE).ask()
+                if kto_rev:
+                    db.revoke_key(kto_rev.strip())
+                    render_success_card("Key Revoked", f"Key {kto_rev} revoked.")
+            questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
+
+        elif "Real-Time Gateway Analytics" in choice:
+            from molab_cli.gateway_db import GatewayDB
+            db = GatewayDB()
+            stats = db.get_stats()
+            t = Table(title="AI Gateway Usage Analytics", box=box.ROUNDED)
+            t.add_column("Metric", style="cyan")
+            t.add_column("Value", style="green")
+            t.add_row("Total Requests", str(stats.get("total_requests", 0)))
+            t.add_row("Total Prompt Tokens", f"{stats.get('total_prompt_tokens', 0):,}")
+            t.add_row("Total Completion Tokens", f"{stats.get('total_completion_tokens', 0):,}")
+            t.add_row("Active Virtual Keys", str(stats.get("active_keys", 0)))
+            console.print(t)
+            questionary.text("Press Enter to continue...", style=QUESTIONARY_STYLE).ask()
+
         elif "Check Model Health" in choice:
             sess = SandboxSession(active_id, client=client)
             with console.status("[bold cyan]Pinging model server inside pod...[/bold cyan]"):
@@ -791,19 +885,22 @@ def action_account_settings() -> None:
 def action_show_help() -> None:
     """Display quick reference cheatsheet."""
     guide = (
-        "### ⚡ MoLab CLI Cheat Sheet (v2.3.1)\n\n"
+        f"### ⚡ MoLab CLI Cheat Sheet (v{__version__})\n\n"
         "| Command | Description |\n"
         "|---|---|\n"
         "| `molab` / `molab ui` | Launch this interactive TUI Control Center dashboard |\n"
-        "| `molab web` / `molab dashboard` | Launch the browser-based Web Control Center |\n"
+        "| `molab deploy <alias>` | 1-Click production model deployment on Blackwell 96GB |\n"
+        "| `molab perf` | Live Prefix Cache Hit Rate %, TTFT, and Blackwell thermals |\n"
+        "| `molab chat` | Autonomous terminal coding agent loop with /undo |\n"
+        "| `molab share` / `public` | Expose endpoint to external clients via Cloudflare tunnel |\n"
         "| `molab free` | Audit Blackwell pods and recommend free idle pod |\n"
-        "| `molab gallery <list|search|download>` | Browse and clone 111+ community AI recipes |\n"
-        "| `molab vault <pack|unpack|inspect>` | 100% on-MoLab permanent storage vault (0 local bytes) |\n"
+        "| `molab vault <pack|unpack>` | 100% on-MoLab permanent storage vault (0 local bytes) |\n"
         "| `molab permanent <id>` | 1-Click 24/7 infinite machine (defeats 30m idle reaper) |\n"
-        "| `molab job submit '<cmd>'` | Submit background job tracked in local SQLite |\n"
-        "| `molab env <id>` | Inspect remote container environment and gVisor kernel |\n"
-        "| `molab thumbnail <id>` | Generate visual Open Graph SVG preview |\n"
         "| `molab forward <id>` | Bridge localhost:8000 to remote model server |\n"
+        "| `molab keys <create|list>` | Issue virtual API keys with RPM/TPM limits |\n"
+        "| `molab stats` | Real-time AI Gateway token analytics & audit logs |\n"
+        "| `molab job submit '<cmd>'` | Submit background job tracked in local SQLite |\n"
+        "| `molab batch run <file>` | Multi-pod DAG pipeline orchestration |\n"
         "| `molab push/pull <id>` | High-speed native HTTP/2 streaming transfers |\n"
     )
     console.print(Panel(Markdown(guide), title="📖 Quick Reference & Documentation", border_style="cyan"))
