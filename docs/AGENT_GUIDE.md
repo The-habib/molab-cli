@@ -28,6 +28,18 @@ This guide contains essential operational knowledge and runbooks for AI agents w
      ```
 5. **Clean Up Ephemeral Storage:**
    * Remove scratch directories on the pod when done (`rm -rf /workspace/scratch`).
+6. **Kernel Evaluation & Native REST over Fragile PTY WebSockets (Mandatory for All Agents):**
+   * Emulated pseudoterminals (`molab exec`, WebSocket PTY) have a strict 4,096-byte input buffer (`MAX_INPUT`), drop bytes, and add latency.
+   * Prioritize Direct Kernel Evaluation (`molab kernel eval` or `Pod.eval()`) and native REST routes (`molab usage`, `molab env`) over PTY bash subshells.
+   * In model serving, deploy with compiled fused kernels (**FlashInfer**, **Triton**, **Chunked Prefill**, **vLLM**) rather than raw unoptimized PyTorch loops.
+7. **The Prefix-Cache Stability Contract:**
+   * Base system prompts and tool schemas must remain 100% byte-frozen across turns. Inject dynamic context strictly in the tail user turn to ensure 90%+ Prefix Cache Hit Rates.
+8. **Universal Browser CORS Architecture:**
+   * Preflight `OPTIONS` requests to `/v1/chat/completions`, `/v1/messages`, `/v1/models` must return `HTTP 204 No Content` with `Access-Control-Max-Age: 86400` and all 4 CORS headers without requiring auth.
+   * Preserve full CORS headers across all error responses (401, 404, 429, 500) so frontend applications can inspect JSON error objects.
+9. **Dual API Compatibility & Dynamic Model Aliasing:**
+   * Expose OpenAI (`/v1/chat/completions`) and Anthropic (`/v1/messages`) endpoints side-by-side with SSE streaming.
+   * Dynamically map arbitrary caller model aliases (`gpt-4o`, `claude-3-7-sonnet-20250219`, `qwen-32b`, `default`) to the loaded Blackwell model, while returning standard `HTTP 404` for unrecognized garbage models.
 
 ---
 
