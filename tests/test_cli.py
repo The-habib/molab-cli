@@ -94,3 +94,11 @@ def test_tui_non_tty_exit():
         assert res.exit_code == 0
         assert "requires an interactive terminal" in res.output
 
+
+def test_cli_annotations_resolve():
+    import inspect
+    from molab_cli.cli import cmd_chat
+    ann = inspect.get_annotations(cmd_chat)
+    assert "extra_args" in ann
+
+

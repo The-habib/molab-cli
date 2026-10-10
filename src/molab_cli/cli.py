@@ -2,12 +2,14 @@
 Rich CLI interface for molabctl.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import click
 from rich import box

@@ -16,6 +16,7 @@ Every defect documented here was reproduced, analyzed down to the underlying run
 | **BUG-002** | Interactive TUI | `molab`, `molab ui` | **HIGH** | `questionary.select().ask()` raised unhandled `EOFError` when executed in non-TTY environments (CI, background agents, redirected stdin). Generic handler displayed empty red card and exited with code 1. | Added upfront `not sys.stdin.isatty()` guard and clean fallback message with code 0; caught `(KeyboardInterrupt, EOFError)` in event loop. | `tests/test_cli.py::test_tui_non_tty_exit` |
 | **BUG-003** | Command Execution | `molab exec <pod_id>` | **MEDIUM** | When a user provided only a pod ID (e.g. `molab exec nb_xxx`), the command parser treated the pod ID as the remote bash command string and attempted to execute it on the auto-resolved target pod. | Added validation checking `if command is None and notebook_id.startswith("nb_")`, raising a structured `ValidationError` with usage hint. | `tests/test_cli.py::test_exec_missing_command_validation` |
 | **BUG-004** | Package Installation | `molab install <pod_id>` | **MEDIUM** | Parameter signature required both `notebook_id` and `packages`. Invoking `molab install torch` misidentified `torch` as the pod ID, and `molab install nb_xxx` without packages crashed without clear guidance. | Restructured arguments to `target_or_pkg` and `extra_pkgs`. Enabled zero-friction auto-targeting if first argument is not a pod ID, and raised structured `ValidationError` if pod ID has no package arguments. | `tests/test_cli.py::test_install_missing_packages_validation` |
+| **BUG-005** | CLI Type Annotations / CI | `src/molab_cli/cli.py` | **CRITICAL** | `Tuple` was used in `cmd_chat` (`extra_args: Tuple[str, ...]`) and `Dict, Any` in `on_event` without being imported in `cli.py`. In Python 3.10–3.13, eager annotation evaluation triggered `NameError: name 'Tuple' is not defined` during CI test collection (Run 38089335278). | Added `from __future__ import annotations` and imported `Any, Dict, List, Optional, Tuple, Union` from `typing`. | `tests/test_cli.py::test_cli_annotations_resolve` |
 
 ---
 
@@ -141,6 +142,31 @@ Click arguments were strictly bound to `@click.argument("notebook_id")` and `@cl
 
 ---
 
+### BUG-005: CLI Type Annotations NameError on Python 3.10–3.13
+
+#### Symptoms
+GitHub Actions CI run `38089335278` on commit `e6d172d8a436585145b0a39dfa5db97c92b238ee` failed with:
+```text
+/opt/hostedtoolcache/Python/3.13.16/x64/lib/python3.13/site-packages/molab_cli/cli.py:1200: in <module>
+    extra_args: Tuple[str, ...],
+E   NameError: name 'Tuple' is not defined
+```
+Collection halted with 4 errors across `test_backend_cli.py`, `test_batch_cli.py`, `test_cli.py`, and `test_tunnel.py`.
+
+#### Root Cause
+In `src/molab_cli/cli.py`:
+- `Tuple` was used in `cmd_chat` at line 1200 without being imported from `typing`.
+- `Dict` and `Any` were used in `on_event` at line 1639 without being imported from `typing`.
+In Python 3.10 through 3.13 without deferred annotations, function signature annotations are evaluated immediately when functions are declared during module import.
+
+#### Resolution
+1. Added `from __future__ import annotations` to ensure Python 3.7+ deferred string annotation behavior.
+2. Imported `Any, Dict, List, Optional, Tuple, Union` explicitly from `typing` in `src/molab_cli/cli.py`.
+3. Verified zero unresolved annotations across all 71 Python files via static AST audit.
+4. Added regression test `tests/test_cli.py::test_cli_annotations_resolve`.
+
+---
+
 ## 3. Full CLI Command Audit Summary
 
 All 106 Click commands and subcommands across the entire CLI hierarchy were tested with `--help` and verified to return exit code 0:
@@ -157,8 +183,9 @@ All 106 Click commands and subcommands across the entire CLI hierarchy were test
 
 ## 4. Test Verification Summary
 
-- **Total Unit & Integration Tests**: 191
-- **Passed**: 191 (100%)
+- **Total Unit & Integration Tests**: 192
+- **Passed**: 192 (100%)
 - **Failed**: 0
-- **Execution Time**: ~9.9s
+- **Execution Time**: ~10.5s
 - **Python Version Compatibility**: Verified against Python 3.10, 3.11, 3.12, 3.13, 3.14.
+
