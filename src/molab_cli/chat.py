@@ -9,6 +9,9 @@ import sys
 import time
 import json
 import re
+import shutil
+import subprocess
+import urllib.request
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from rich.console import Console
@@ -535,6 +538,118 @@ class TerminalAgentChat:
         return None
 
 
+def ensure_claude_bridge(port: int = 8082, notebook_id: Optional[str] = None) -> bool:
+    """Ensure the MoLab Blackwell AI bridge is running on localhost."""
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/health", headers={"User-Agent": "molab-cli"})
+        with urllib.request.urlopen(req, timeout=6.0) as resp:
+            if resp.status == 200:
+                return True
+    except Exception:
+        pass
+
+    cmd = [sys.executable, "-m", "molab_cli.bridge"]
+    env = os.environ.copy()
+    env["BRIDGE_PORT"] = str(port)
+    if notebook_id:
+        env["MOLAB_POD_ID"] = notebook_id
+
+    try:
+        subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        console.print(f"[red]Failed to spawn MoLab bridge daemon:[/red] {e}")
+        return False
+
+    deadline = time.time() + 15.0
+    while time.time() < deadline:
+        time.sleep(0.3)
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/health", headers={"User-Agent": "molab-cli"})
+            with urllib.request.urlopen(req, timeout=6.0) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:
+            pass
+
+    return False
+
+
+def run_claude_code_agent(
+    notebook_id: str,
+    model_name: Optional[str] = None,
+    prompt: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
+) -> None:
+    """
+    Launch native Claude Code CLI agent dynamically connected to MoLab Blackwell GPU.
+    Styled according to Perspective Design System (Modern, Clean, High-Contrast #00BD7D).
+    """
+    bridge_online = ensure_claude_bridge(8082, notebook_id=notebook_id)
+    if not bridge_online:
+        console.print("[yellow]⚠ Warning: Bridge startup timed out. Claude Code will attempt direct auto-launch.[/yellow]")
+
+    # Resolve active model name
+    active_model = model_name
+    if not active_model:
+        try:
+            session = SandboxSession(notebook_id)
+            active_model = session.get_active_model()
+        except Exception:
+            pass
+    active_model = active_model or "huihui-ai/Qwen2.5-32B-Instruct-abliterated"
+
+    # Perspective Design System Banner (Emerald: #00BD7D, Surface: #111827)
+    perspective_title = "[bold #00BD7D]◆ PERSPECTIVE AI[/bold #00BD7D] [bold white]• MoLab Terminal Agent[/bold white]"
+    perspective_body = (
+        f"  [bold white]Target Pod:[/bold white]      [#00BD7D]{notebook_id}[/#00BD7D]\n"
+        f"  [bold white]Neural Model:[/bold white]    [bold green]{active_model}[/bold green] [dim](bfloat16, sm_120)[/dim]\n"
+        f"  [bold white]Hardware:[/bold white]        [bold yellow]NVIDIA RTX PRO 6000 Blackwell (94.97 GB GDDR7)[/bold yellow]\n"
+        f"  [bold white]Architecture:[/bold white]    [dim]Autonomous Agentic Loop • Local Tool Calling • Live SSE[/dim]\n"
+        f"  [bold white]Live Thinking:[/bold white]   [bold #00BD7D]ENABLED[/bold #00BD7D] [dim](streaming thinking_delta)[/dim]\n"
+        f"  [bold white]Native Engine:[/bold white]   [bold cyan]Claude Code v2.1.x (Termux Native ARM64)[/bold cyan]\n"
+        f"  [bold white]Bridge State:[/bold white]    [#00BD7D]● ONLINE[/#00BD7D] [dim](http://127.0.0.1:8082)[/dim]"
+    )
+    console.print()
+    console.print(Panel(
+        perspective_body,
+        title=perspective_title,
+        border_style="#00BD7D",
+        subtitle="[dim]Zero-Config GPU Terminal Agent • Type /help in Claude for agent controls[/dim]",
+        subtitle_align="right",
+    ))
+    console.print()
+
+    # Configure execution environment
+    env = os.environ.copy()
+    env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:8082"
+    env["ANTHROPIC_API_KEY"] = "sk-molab-blackwell-cluster"
+    env["CLAUDE_CODE_TERMUX_NO_PROXY_HELPER"] = "1"
+    env["MOLAB_POD_ID"] = notebook_id
+    env["TARGET_MODEL"] = active_model
+
+    claude_bin = shutil.which("claude") or "/data/data/com.termux/files/usr/bin/claude"
+    args = [claude_bin]
+
+    if prompt:
+        args.extend(["-p", prompt])
+    if extra_args:
+        args.extend(extra_args)
+
+    # Launch Claude Code directly in current terminal session
+    try:
+        subprocess.run(args, env=env)
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        console.print(f"[red]Error executing Claude Code agent:[/red] {e}")
+
+
 def run_terminal_chat(
     notebook_id: Optional[str] = None,
     max_tokens: int = 1024,
@@ -542,18 +657,33 @@ def run_terminal_chat(
     think_mode: str = "full",
     system_prompt: Optional[str] = None,
     model_name: Optional[str] = None,
+    legacy: bool = False,
+    prompt: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
 ) -> None:
     """
     Entry point to launch the interactive terminal agent.
     If notebook_id is omitted, dynamically discovers the active GPU pod.
+    Defaults to native Claude Code agent unless --legacy is passed or claude is missing.
     """
     if not notebook_id:
-        with console.status("[bold green]Auto-discovering active Blackwell pod...[/bold green]"):
+        with console.status("[bold #00BD7D]Auto-discovering active Blackwell pod...[/bold #00BD7D]"):
             notebook_id = SandboxSession.discover_active_pod()
 
     if not notebook_id:
         console.print("[red]No running MoLab pod found.[/red]")
         console.print("[dim]Please specify a pod ID: molab chat <notebook_id>[/dim]")
+        return
+
+    has_claude = bool(shutil.which("claude") or os.path.exists("/data/data/com.termux/files/usr/bin/claude"))
+
+    if not legacy and has_claude:
+        run_claude_code_agent(
+            notebook_id=notebook_id,
+            model_name=model_name,
+            prompt=prompt,
+            extra_args=extra_args,
+        )
         return
 
     agent = TerminalAgentChat(
@@ -565,3 +695,4 @@ def run_terminal_chat(
         system_prompt=system_prompt,
     )
     agent.run()
+

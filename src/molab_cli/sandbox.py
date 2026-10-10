@@ -140,7 +140,18 @@ class SandboxSession:
         Execute a one-shot bash command inside the sandbox pod and return stdout/stderr.
         """
         self.resolve()
-        return asyncio.run(self._async_execute(cmd, timeout))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(asyncio.run, self._async_execute(cmd, timeout))
+                return future.result()
+        else:
+            return asyncio.run(self._async_execute(cmd, timeout))
 
     async def _async_execute(self, cmd: str, timeout: float) -> str:
         uri = self.ws_terminal_url
@@ -486,6 +497,21 @@ class SandboxSession:
             pass
         return None
 
+    async def async_get_active_model(self) -> Optional[str]:
+        """Async fetch the currently active model ID from the pod's vLLM / OpenAI server."""
+        raw = await self._async_execute("curl -s http://127.0.0.1:8000/v1/models", timeout=6.0)
+        try:
+            idx = raw.find("{")
+            if idx != -1:
+                data = json.loads(raw[idx:])
+                models = data.get("data", [])
+                if models and "id" in models[0]:
+                    return models[0]["id"]
+        except Exception:
+            pass
+        return None
+
+
     @classmethod
     def discover_active_pod(cls, client: Optional[Any] = None) -> Optional[str]:
         """Auto-discover the running or free GPU pod in the user's workspace."""
@@ -609,18 +635,194 @@ class SandboxSession:
                     except asyncio.TimeoutError:
                         break
 
-        # Async generator wrapper for sync/async usage
-        loop = asyncio.new_event_loop()
-        try:
-            gen = _run_stream()
+    async def async_chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        max_tokens: int = 512,
+        temperature: float = 0.7,
+        model: Optional[str] = None,
+        extra_payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Async query the OpenAI-compatible model server running inside the cloud pod."""
+        if not model:
+            model = await self.async_get_active_model() or "default"
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": False,
+        }
+        if extra_payload:
+            for k, v in extra_payload.items():
+                if k not in payload:
+                    payload[k] = v
+
+        self.resolve()
+        json_bytes = json.dumps(payload).encode("utf-8")
+        if len(json_bytes) > 2500:
+            req_name = f"_req_{uuid.uuid4().hex[:8]}.json"
+            upload_url = f"{self.base_url}/api/files/create?token={self.auth_token}"
+            proc = await asyncio.create_subprocess_exec(
+                "curl", "-s", "-f", "-X", "POST", upload_url,
+                "-F", "path=/tmp", "-F", "type=file", "-F", f"name={req_name}",
+                "-F", "file=@-",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.communicate(input=json_bytes)
+            cmd = f"curl -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @/tmp/{req_name} ; rm -f /tmp/{req_name}"
+        else:
+            b64_body = base64.b64encode(json_bytes).decode("utf-8")
+            cmd = f"echo '{b64_body}' | base64 -d | curl -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @-"
+
+        raw = await self._async_execute(cmd, timeout=120.0)
+        idx = raw.find("{")
+        if idx != -1:
+            try:
+                return json.loads(raw[idx:])
+            except Exception:
+                pass
+        return {"choices": [{"message": {"content": raw}}]}
+
+    async def async_stream_chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        model: Optional[str] = None,
+        extra_payload: Optional[Dict[str, Any]] = None,
+    ):
+        """Async generator streaming tokens and reasoning deltas directly from the pod."""
+        if not model:
+            model = await self.async_get_active_model() or "default"
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if extra_payload:
+            for k, v in extra_payload.items():
+                if k not in payload:
+                    payload[k] = v
+
+        self.resolve()
+        json_bytes = json.dumps(payload).encode("utf-8")
+        if len(json_bytes) > 2500:
+            req_name = f"_req_{uuid.uuid4().hex[:8]}.json"
+            upload_url = f"{self.base_url}/api/files/create?token={self.auth_token}"
+            proc = await asyncio.create_subprocess_exec(
+                "curl", "-s", "-f", "-X", "POST", upload_url,
+                "-F", "path=/tmp", "-F", "type=file", "-F", f"name={req_name}",
+                "-F", "file=@-",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.communicate(input=json_bytes)
+            cmd = f"curl -N -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @/tmp/{req_name} ; rm -f /tmp/{req_name}"
+        else:
+            b64_body = base64.b64encode(json_bytes).decode("utf-8")
+            cmd = f"echo '{b64_body}' | base64 -d | curl -N -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @-"
+
+        self.resolve()
+        uri = self.ws_terminal_url
+
+        async with websockets.connect(uri) as ws:
+            # Drain initial prompt / welcome text
+            await asyncio.sleep(0.3)
+            try:
+                while True:
+                    await asyncio.wait_for(ws.recv(), timeout=0.2)
+            except asyncio.TimeoutError:
+                pass
+
+            await ws.send(f"{cmd}\n")
+            line_buffer = ""
             while True:
                 try:
-                    delta = loop.run_until_complete(gen.__anext__())
-                    yield delta
-                except StopAsyncIteration:
+                    frame = await asyncio.wait_for(ws.recv(), timeout=20.0)
+                    clean = re.sub(r"\x1b\][^\x07\x1b]*\x07|\x1b\[[0-9;?]*[a-zA-Z]", "", frame)
+                    line_buffer += clean
+                    while "\n" in line_buffer:
+                        line, line_buffer = line_buffer.split("\n", 1)
+                        line = line.strip()
+                        if line.startswith("data: "):
+                            chunk_str = line[6:].strip()
+                            if chunk_str == "[DONE]":
+                                return
+                            try:
+                                data = json.loads(chunk_str)
+                                choices = data.get("choices", [])
+                                if choices:
+                                    delta = choices[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    reasoning = delta.get("reasoning_content", "")
+                                    finish_reason = choices[0].get("finish_reason")
+                                    tool_calls = delta.get("tool_calls")
+                                    if content or reasoning or finish_reason or tool_calls:
+                                        yield {
+                                            "content": content,
+                                            "reasoning_content": reasoning,
+                                            "finish_reason": finish_reason,
+                                            "tool_calls": tool_calls,
+                                            "raw": data,
+                                        }
+                            except Exception:
+                                pass
+                        elif line.startswith("{") and '"error"' in line:
+                            try:
+                                err_data = json.loads(line)
+                                if "error" in err_data:
+                                    msg = err_data["error"].get("message", line)
+                                    raise RuntimeError(f"vLLM server error: {msg}")
+                            except json.JSONDecodeError:
+                                pass
+                except asyncio.TimeoutError:
                     break
-        finally:
-            loop.close()
+
+    def stream_chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        model: Optional[str] = None,
+    ):
+        """Synchronous wrapper for async_stream_chat_completion."""
+        import queue
+        import threading
+
+        q = queue.Queue()
+
+        def _worker():
+            async def _run():
+                try:
+                    async for delta in self.async_stream_chat_completion(
+                        messages=messages, max_tokens=max_tokens, temperature=temperature, model=model
+                    ):
+                        q.put(delta)
+                except Exception as ex:
+                    q.put(ex)
+                finally:
+                    q.put(StopIteration)
+
+            asyncio.run(_run())
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+
+        while True:
+            item = q.get()
+            if item is StopIteration:
+                break
+            elif isinstance(item, Exception):
+                raise item
+            yield item
 
     def ensure_model_server_running(self) -> bool:
         """

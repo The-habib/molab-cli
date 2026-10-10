@@ -213,6 +213,22 @@ Launch an industry-grade interactive terminal AI agent with real-time token stre
   molab chat --temp 0.85
   ```
 
+### `molab bridge [start|status|stop]`
+Unified Blackwell AI Bridge supporting both **Hermes Agent** (OpenAI `/v1/chat/completions` on port 8000) and **Claude Code** (Anthropic `/v1/messages` on port 8082).
+* **Subcommands:**
+  * `start [--port 8000] [--host 127.0.0.1]`: Run the bridge server with bidirectional port forwarder.
+  * `status`: Query live bridge health, active Blackwell pod, loaded model, and listening ports.
+  * `stop`: Terminate active bridge server daemons.
+* **Hermes Agent Integration:**
+  * Zero configuration: Launching `hermes` or `hermes -z "<prompt>"` automatically connects to the Blackwell GPU cluster with native streaming, `<think>` reasoning traces, and full tool calling.
+* **Example:**
+  ```bash
+  molab bridge status
+  molab bridge start
+  hermes -z "Check system architecture"
+  ```
+
+
 
 ---
 

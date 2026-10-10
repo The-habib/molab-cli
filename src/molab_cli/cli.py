@@ -734,6 +734,47 @@ def cmd_forward(notebook_id: str, port: int):
         console.print("\n[dim]Forwarder stopped.[/dim]")
 
 
+@cli.group("bridge")
+def bridge_group():
+    """Manage local Blackwell AI Bridge for Hermes Agent & Claude Code."""
+    pass
+
+
+@bridge_group.command("start")
+@click.option("--port", default=8000, help="Bridge port (default: 8000)")
+@click.option("--host", default="127.0.0.1", help="Bridge host (default: 127.0.0.1)")
+def cmd_bridge_start(port: int, host: str):
+    """Start the Blackwell bridge server."""
+    from molab_cli.bridge import start_bridge_server
+    start_bridge_server(port=port, host=host)
+
+
+@bridge_group.command("status")
+def cmd_bridge_status():
+    """Check Blackwell bridge health and status."""
+    import urllib.request
+    import json
+    try:
+        req = urllib.request.Request("http://127.0.0.1:8000/health")
+        with urllib.request.urlopen(req, timeout=6.0) as r:
+            data = json.loads(r.read())
+            console.print("[bold green]✓ Bridge Online[/bold green]")
+            console.print(f"  • Pod ID:    {data.get('pod_id')}")
+            console.print(f"  • Model:     {data.get('model')}")
+            console.print(f"  • Hardware:  {data.get('hardware')}")
+            console.print("  • Ports:     8000 (OpenAI / Hermes), 8082 (Anthropic / Claude Code)")
+    except Exception as e:
+        console.print(f"[red]✗ Bridge Offline or Unreachable:[/red] {e}")
+
+
+@bridge_group.command("stop")
+def cmd_bridge_stop():
+    """Stop running Blackwell bridge daemons."""
+    import subprocess
+    subprocess.run(["pkill", "-f", "molab_cli.bridge"], stderr=subprocess.DEVNULL)
+    console.print("[yellow]✓ Blackwell bridge stopped.[/yellow]")
+
+
 @cli.command("chat")
 @click.argument("notebook_id", required=False)
 @click.option("--max-tokens", default=1024, help="Max tokens to generate (default: 1024)")
@@ -741,6 +782,9 @@ def cmd_forward(notebook_id: str, port: int):
 @click.option("--think", "think_mode", type=click.Choice(["full", "compact", "off"]), default="full", help="Thinking display mode: full, compact, or off")
 @click.option("--model", "model_name", default=None, help="Target model identifier (auto-detected if omitted)")
 @click.option("--system", "system_prompt", default=None, help="Custom system prompt")
+@click.option("-p", "--print", "prompt", default=None, help="Execute prompt non-interactively and print response")
+@click.option("--legacy", is_flag=True, help="Use legacy rich terminal REPL instead of native Claude Code agent")
+@click.argument("extra_args", nargs=-1)
 def cmd_chat(
     notebook_id: Optional[str],
     max_tokens: int,
@@ -748,8 +792,11 @@ def cmd_chat(
     think_mode: str,
     model_name: Optional[str],
     system_prompt: Optional[str],
+    prompt: Optional[str],
+    legacy: bool,
+    extra_args: Tuple[str, ...],
 ):
-    """Industry-grade interactive terminal chat with real-time thinking and streaming."""
+    """Industry-grade terminal coding agent powered by Claude Code on MoLab Blackwell GPU."""
     from molab_cli.chat import run_terminal_chat
     run_terminal_chat(
         notebook_id=notebook_id,
@@ -758,7 +805,11 @@ def cmd_chat(
         think_mode=think_mode,
         system_prompt=system_prompt,
         model_name=model_name,
+        legacy=legacy,
+        prompt=prompt,
+        extra_args=list(extra_args) if extra_args else None,
     )
+
 
 
 
