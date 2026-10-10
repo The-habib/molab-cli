@@ -996,6 +996,48 @@ def cmd_perf(notebook_id: Optional[str], as_json: bool):
         render_performance_dashboard(data)
 
 
+@cli.command("deploy")
+@click.argument("model_alias", default="qwen-32b", required=False)
+@click.option("--pod", "pod_id", default=None, help="Target pod ID (auto-discovered if omitted)")
+@click.option("--token", default=None, help="Cloudflare Tunnel token for persistent custom domain")
+@click.option("--no-tunnel", is_flag=True, help="Disable public Cloudflare tunnel (localhost only)")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output deployment result as JSON")
+def cmd_deploy(model_alias: str, pod_id: Optional[str], token: Optional[str], no_tunnel: bool, as_json: bool):
+    """1-Click production model deployment with hyper-tuned Blackwell flags and public credentials."""
+    from molab_cli.deploy import deploy_model_on_pod
+    from molab_cli.tunnel import render_credentials
+
+    with console.status(f"[bold #00BD7D]Orchestrating 1-Click deployment for [{model_alias}]...[/bold #00BD7D]"):
+        try:
+            res = deploy_model_on_pod(
+                model_alias=model_alias,
+                pod_id=pod_id,
+                tunnel_token=token,
+                skip_tunnel=no_tunnel,
+            )
+        except Exception as e:
+            console.print(f"[bold red]Deployment failed:[/bold red] {e}")
+            sys.exit(1)
+
+    if as_json:
+        print(json.dumps(res, indent=2))
+        return
+
+    console.print(Panel(
+        f"[bold green]✔ Model Successfully Deployed & Ready![/bold green]\n\n"
+        f"• [bold white]Model:[/bold white]      [bold green]{res['model_id']}[/bold green]\n"
+        f"• [bold white]Target Pod:[/bold white] [#00BD7D]{res['pod_id']}[/#00BD7D]\n"
+        f"• [bold white]Hardware:[/bold white]   [yellow]NVIDIA RTX PRO 6000 Blackwell (94.97 GB GDDR7, sm_120)[/yellow]\n"
+        f"• [bold white]Local Base:[/bold white]  [cyan]{res['local_url']}[/cyan]\n"
+        f"• [bold white]API Key:[/bold white]     [bold white]{res['api_key']}[/bold white]",
+        title="[bold #00BD7D]◆ MoLab Blackwell Model Deployment[/bold #00BD7D]",
+        border_style="#00BD7D",
+    ))
+
+    if res.get("tunnel"):
+        render_credentials(res["tunnel"])
+
+
 
 @cli.command("chat")
 @click.argument("notebook_id", required=False)
