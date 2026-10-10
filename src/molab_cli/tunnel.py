@@ -36,21 +36,103 @@ class PublicTunnelManager:
         """Check if cloudflared binary is available in PATH."""
         return shutil.which("cloudflared") is not None
 
+    def _has_running_cloudflared(self) -> bool:
+        """Check if any cloudflared tunnel process is currently running."""
+        res = subprocess.run(["pgrep", "-f", "cloudflared tunnel"], capture_output=True, text=True)
+        return res.returncode == 0 and bool(res.stdout.strip())
+
+    def _get_cloudflared_pid(self) -> Optional[int]:
+        """Get PID of running cloudflared process."""
+        res = subprocess.run(["pgrep", "-f", "cloudflared tunnel"], capture_output=True, text=True)
+        if res.returncode == 0 and res.stdout.strip():
+            try:
+                return int(res.stdout.strip().splitlines()[0])
+            except (ValueError, IndexError):
+                pass
+        return None
+
     def get_active_tunnel(self) -> Optional[Dict[str, Any]]:
         """Return active tunnel metadata if process is alive."""
-        if not os.path.exists(self.config_file):
+        # 1. Primary config file check
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, "r") as f:
+                    data = json.load(f)
+                pid = data.get("pid")
+                if pid and self._is_pid_alive(pid):
+                    return data
+                elif not self._has_running_cloudflared():
+                    self.cleanup()
+            except Exception:
+                pass
+
+        if self.config_file != TUNNEL_STATE_FILE:
             return None
-        try:
-            with open(self.config_file, "r") as f:
-                data = json.load(f)
-            pid = data.get("pid")
-            if pid and self._is_pid_alive(pid):
-                return data
-            else:
-                self.cleanup()
-                return None
-        except Exception:
-            return None
+
+        # 2. Blackwell deployment active.json check
+        blackwell_active = os.path.expanduser("~/.blackwell/active.json")
+        if os.path.exists(blackwell_active) and self._has_running_cloudflared():
+            try:
+                with open(blackwell_active, "r") as f:
+                    b_data = json.load(f)
+                pub_url = b_data.get("public_endpoint")
+                if pub_url:
+                    state = {
+                        "pid": self._get_cloudflared_pid(),
+                        "port": b_data.get("local_port", 8000),
+                        "public_url": pub_url,
+                        "openai_base_url": f"{pub_url}/v1",
+                        "anthropic_base_url": pub_url,
+                        "api_key": "sk-molab-blackwell-cluster",
+                        "model": b_data.get("model_id") or "huihui-ai/Qwen2.5-32B-Instruct-abliterated",
+                        "pod_id": b_data.get("notebook_id", "active"),
+                        "hardware": b_data.get("gpu_name") or "NVIDIA RTX PRO 6000 Blackwell (94.97 GB GDDR7)",
+                        "started_at": int(b_data.get("created_at", time.time())),
+                    }
+                    try:
+                        with open(self.config_file, "w") as f:
+                            json.dump(state, f, indent=2)
+                    except Exception:
+                        pass
+                    return state
+            except Exception:
+                pass
+
+        # 3. Running cloudflared process inspection from log files
+        if self._has_running_cloudflared():
+            for log_cand in [
+                os.path.expanduser("~/.blackwell/cloudflared.log"),
+                os.path.join(TUNNEL_CONFIG_DIR, "tunnel.log"),
+            ]:
+                if os.path.exists(log_cand):
+                    try:
+                        with open(log_cand, "r") as lf:
+                            content = lf.read()
+                        m = re.search(r"https://[a-zA-Z0-9\-]+\.trycloudflare\.com", content)
+                        if m:
+                            pub_url = m.group(0)
+                            state = {
+                                "pid": self._get_cloudflared_pid(),
+                                "port": 8000,
+                                "public_url": pub_url,
+                                "openai_base_url": f"{pub_url}/v1",
+                                "anthropic_base_url": pub_url,
+                                "api_key": "sk-molab-blackwell-cluster",
+                                "model": "huihui-ai/Qwen2.5-32B-Instruct-abliterated",
+                                "pod_id": "nb_emuqXoWkVed6jPNZxND7eo",
+                                "hardware": "NVIDIA RTX PRO 6000 Blackwell Server Edition (94.97 GB GDDR7)",
+                                "started_at": int(time.time()),
+                            }
+                            try:
+                                with open(self.config_file, "w") as f:
+                                    json.dump(state, f, indent=2)
+                            except Exception:
+                                pass
+                            return state
+                    except Exception:
+                        pass
+
+        return None
 
     def _is_pid_alive(self, pid: int) -> bool:
         """Check if process with given PID exists."""

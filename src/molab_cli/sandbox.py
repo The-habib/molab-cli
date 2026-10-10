@@ -713,10 +713,10 @@ class SandboxSession:
         json_bytes = json.dumps(payload).encode("utf-8")
         if len(json_bytes) > 1500:
             req_name = await self._upload_temp_json_payload(json_bytes)
-            cmd = f"curl -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @/tmp/{req_name} ; rm -f /tmp/{req_name}"
+            cmd = f"AUTH_KEY=$(cat /workspace/api_key.txt 2>/dev/null || echo '') ; curl -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' -H \"Authorization: Bearer $AUTH_KEY\" --data-binary @/tmp/{req_name} ; rm -f /tmp/{req_name}"
         else:
             b64_body = base64.b64encode(json_bytes).decode("utf-8")
-            cmd = f"echo '{b64_body}' | base64 -d | curl -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @-"
+            cmd = f"AUTH_KEY=$(cat /workspace/api_key.txt 2>/dev/null || echo '') ; echo '{b64_body}' | base64 -d | curl -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' -H \"Authorization: Bearer $AUTH_KEY\" --data-binary @-"
 
         raw = await self._async_execute(cmd, timeout=120.0)
         idx = raw.find("{")
@@ -755,10 +755,10 @@ class SandboxSession:
         json_bytes = json.dumps(payload).encode("utf-8")
         if len(json_bytes) > 1500:
             req_name = await self._upload_temp_json_payload(json_bytes)
-            cmd = f"curl -N -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @/tmp/{req_name} ; rm -f /tmp/{req_name}"
+            cmd = f"AUTH_KEY=$(cat /workspace/api_key.txt 2>/dev/null || echo '') ; curl -N -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' -H \"Authorization: Bearer $AUTH_KEY\" --data-binary @/tmp/{req_name} ; rm -f /tmp/{req_name}"
         else:
             b64_body = base64.b64encode(json_bytes).decode("utf-8")
-            cmd = f"echo '{b64_body}' | base64 -d | curl -N -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @-"
+            cmd = f"AUTH_KEY=$(cat /workspace/api_key.txt 2>/dev/null || echo '') ; echo '{b64_body}' | base64 -d | curl -N -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' -H \"Authorization: Bearer $AUTH_KEY\" --data-binary @-"
 
         self.resolve()
         uri = self.ws_terminal_url

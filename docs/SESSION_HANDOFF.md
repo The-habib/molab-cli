@@ -11,10 +11,11 @@
 
 The MoLab CLI (`molab` / `molabctl`) has completed an end-to-end UX, architectural, state-management, reliability, and documentation overhaul, followed by autonomous runtime recovery and verified repair.
 * **Working Tree:** Clean, production-ready.
-* **Test Suite:** **192 passed / 192 tests (100% pass rate)** in `pytest`.
+* **Test Suite:** **194 passed / 194 tests (100% pass rate)** in `pytest`.
 * **CI Reliability:** Verified multi-version compatibility across Python 3.10, 3.11, 3.12, 3.13, and 3.14. Resolved CI failure run 38087320418.
 * **Bug Audit:** Comprehensive defect matrix and root-cause analysis documented in [`docs/BUG_AUDIT.md`](file:///data/data/com.termux/files/home/molab-cli/docs/BUG_AUDIT.md).
-* **CLI Surface:** 56 commands and command groups across pod lifecycle, 1-click model deployments, live telemetry profiling, terminal coding agents, public ingress, in-notebook vault persistence, and batch DAG orchestration.
+* **CLI Surface:** 57 commands and command groups across pod lifecycle, 1-click model deployments, live telemetry profiling, terminal coding agents, active credential discovery, public ingress, in-notebook vault persistence, and batch DAG orchestration.
+* **Active Credential Discovery:** `molab credentials` (alias `molab creds`) with `--export` shell eval and `--json` machine-readable output. Auto-discovers endpoints across Cloudflare tunnels, local bridges, and occupied Blackwell pods.
 * **Zero-Friction Target Resolution:** Pod ID is optional across all commands; the CLI automatically resolves active pods, prompts in interactive sessions, and remembers the session pod.
 * **Interactive TUI:** Fully synchronized with all modern v2.4 capabilities with non-TTY headless safe exit.
 * **Hardened Production Gateway:** Universal browser CORS (204 preflight on all endpoints), error-response CORS preservation, model name aliasing with 404 enforcement, dual OpenAI/Anthropic SSE streaming, and persistent named Cloudflare tunnel ingress.
@@ -88,7 +89,7 @@ The MoLab CLI (`molab` / `molabctl`) has completed an end-to-end UX, architectur
 
 ## 5. Verification Results
 
-* **Full Test Run:** `pytest tests/` ➔ **192 passed, 1 warning in 10.5s**.
+* **Full Test Run:** `pytest tests/` ➔ **194 passed, 1 warning in 10.7s**.
 * **Zero Regressions:** All pre-existing tests maintained and passing.
 * **Multi-Version Python CI:** Python 3.10 through 3.14 import and annotation resolution verified.
 * **Redaction Verified:** Zero credentials, cookies, or JWTs leaked in error outputs or test transcripts.

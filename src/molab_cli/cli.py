@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -965,6 +966,90 @@ def cmd_share(port: int, token: Optional[str], hostname: Optional[str], stop: bo
 def cmd_public(ctx, port: int, token: Optional[str], hostname: Optional[str], stop: bool, status: bool, as_json: bool):
     """Alias for 'molab share' to generate public model credentials."""
     ctx.invoke(cmd_share, port=port, token=token, hostname=hostname, stop=stop, status=status, as_json=as_json)
+
+
+@cli.command("credentials")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output active credentials as JSON")
+@click.option("-e", "--export", is_flag=True, help="Print shell export statements for instant environment setup")
+def cmd_credentials(as_json: bool, export: bool):
+    """Retrieve all active credentials, URLs, and client configurations for the deployed model with one command."""
+    from molab_cli.tunnel import PublicTunnelManager, render_credentials
+    mgr = PublicTunnelManager()
+    active = mgr.get_active_tunnel()
+
+    if active:
+        if export:
+            print(f'export OPENAI_BASE_URL="{active.get("openai_base_url")}"')
+            print(f'export OPENAI_API_KEY="{active.get("api_key")}"')
+            print(f'export ANTHROPIC_BASE_URL="{active.get("anthropic_base_url")}"')
+            print(f'export ANTHROPIC_API_KEY="{active.get("api_key")}"')
+            print(f'export MODEL_NAME="{active.get("model")}"')
+            return
+
+        if as_json:
+            print(json.dumps(active, indent=2))
+            return
+
+        render_credentials(active)
+        return
+
+    # Check local model bridge fallback
+    local_state = None
+    try:
+        req = urllib.request.Request("http://127.0.0.1:8000/health")
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            hdata = json.loads(resp.read().decode("utf-8"))
+            local_state = {
+                "status": "local_online",
+                "local_url": "http://127.0.0.1:8000",
+                "openai_base_url": "http://127.0.0.1:8000/v1",
+                "anthropic_base_url": "http://127.0.0.1:8000",
+                "api_key": "sk-molab-blackwell-cluster",
+                "model": hdata.get("model", "huihui-ai/Qwen2.5-32B-Instruct-abliterated"),
+                "pod_id": hdata.get("pod_id", "active"),
+                "hardware": hdata.get("hardware", "NVIDIA RTX PRO 6000 Blackwell Server Edition (94.97 GB GDDR7)"),
+            }
+    except Exception:
+        pass
+
+    if local_state:
+        if export:
+            print(f'export OPENAI_BASE_URL="{local_state["openai_base_url"]}"')
+            print(f'export OPENAI_API_KEY="{local_state["api_key"]}"')
+            print(f'export ANTHROPIC_BASE_URL="{local_state["anthropic_base_url"]}"')
+            print(f'export ANTHROPIC_API_KEY="{local_state["api_key"]}"')
+            print(f'export MODEL_NAME="{local_state["model"]}"')
+            return
+        if as_json:
+            print(json.dumps(local_state, indent=2))
+            return
+
+        render_info_card(
+            "Local AI Model Online",
+            f"Model '{local_state['model']}' is responding locally at {local_state['local_url']}.\n\n"
+            f"• Base URL: {local_state['openai_base_url']}\n"
+            f"• API Key:  {local_state['api_key']}\n\n"
+            "To generate a public HTTPS URL, run: 'molab share'",
+        )
+        return
+
+    if as_json:
+        print(json.dumps({"status": "offline", "message": "No active public tunnel or local model bridge found."}))
+    else:
+        render_warning_card(
+            "No Active Model Credentials",
+            "No running public tunnel or local bridge detected.\n\n"
+            "Run 'molab deploy <model>' to launch a model, or 'molab share' to expose an active pod.",
+        )
+
+
+@cli.command("creds")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output active credentials as JSON")
+@click.option("-e", "--export", is_flag=True, help="Print shell export statements for instant environment setup")
+@click.pass_context
+def cmd_creds(ctx, as_json: bool, export: bool):
+    """Fast shortcut for 'molab credentials'."""
+    ctx.invoke(cmd_credentials, as_json=as_json, export=export)
 
 
 @cli.group("keys")

@@ -103,3 +103,51 @@ def test_cli_annotations_resolve():
     assert "extra_args" in ann
 
 
+def test_cli_credentials_active():
+    from unittest.mock import patch
+    runner = CliRunner()
+    mock_tunnel = {
+        "pid": 9999,
+        "port": 8000,
+        "public_url": "https://test-tunnel.trycloudflare.com",
+        "openai_base_url": "https://test-tunnel.trycloudflare.com/v1",
+        "anthropic_base_url": "https://test-tunnel.trycloudflare.com",
+        "api_key": "sk-molab-test-key",
+        "model": "qwen2.5-coder-32b-abliterated",
+        "pod_id": "nb_test_pod",
+        "hardware": "NVIDIA Blackwell",
+    }
+    with patch("molab_cli.tunnel.PublicTunnelManager.get_active_tunnel", return_value=mock_tunnel):
+        # Default card render
+        res = runner.invoke(cli, ["credentials"])
+        assert res.exit_code == 0
+        assert "https://test-tunnel.trycloudflare.com/v1" in res.output
+
+        # Creds shortcut alias
+        res_alias = runner.invoke(cli, ["creds"])
+        assert res_alias.exit_code == 0
+        assert "https://test-tunnel.trycloudflare.com/v1" in res_alias.output
+
+        # Export flag
+        res_exp = runner.invoke(cli, ["creds", "-e"])
+        assert res_exp.exit_code == 0
+        assert 'export OPENAI_BASE_URL="https://test-tunnel.trycloudflare.com/v1"' in res_exp.output
+        assert 'export OPENAI_API_KEY="sk-molab-test-key"' in res_exp.output
+
+        # JSON flag
+        res_json = runner.invoke(cli, ["creds", "-j"])
+        assert res_json.exit_code == 0
+        assert '"public_url": "https://test-tunnel.trycloudflare.com"' in res_json.output
+
+
+def test_cli_credentials_offline():
+    from unittest.mock import patch
+    runner = CliRunner()
+    with patch("molab_cli.tunnel.PublicTunnelManager.get_active_tunnel", return_value=None), \
+         patch("urllib.request.urlopen", side_effect=Exception("Connection refused")):
+        res = runner.invoke(cli, ["credentials", "-j"])
+        assert res.exit_code == 0
+        assert '"status": "offline"' in res.output
+
+
+

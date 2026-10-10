@@ -48,6 +48,21 @@ MoLab supports two modes of public ingress:
   molab share --token <YOUR_CLOUDFLARE_TUNNEL_TOKEN>
   ```
 
+### Option C: Instant Credential Discovery (`molab credentials` / `molab creds`)
+Instead of hunting through terminal logs or JSON state files, MoLab auto-discovers and unifies all live endpoints, API keys, and model aliases with one command:
+```bash
+molab creds
+```
+* **Auto-Export for Terminal Agents:** Instantly inject active endpoints and credentials into your current shell session:
+  ```bash
+  eval $(molab creds -e)
+  ```
+  Exports `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, and `MODEL_NAME`.
+* **Machine-Readable Scripting:**
+  ```bash
+  molab creds --json
+  ```
+
 ---
 
 ## 3. SSE Keep-Alives & Cloudflare 100-Second Timeout Prevention

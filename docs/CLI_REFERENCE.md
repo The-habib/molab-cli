@@ -341,6 +341,37 @@ Expose the deployed AI model with an instant, public, globally reachable HTTPS U
   molab share --stop
   ```
 
+### `molab credentials` (alias: `molab creds`)
+Retrieve all active credentials, public/local endpoints, and model aliases for the deployed model cluster in one command.
+* **Flags:**
+  * `-e, --export`: Print ready-to-eval shell statements (`export OPENAI_BASE_URL=...`, etc.) to instantly configure terminal coding agents via `eval $(molab creds -e)`.
+  * `-j, --json`: Output credentials dictionary in structured machine-readable JSON.
+* **Auto-Discovery Sources:**
+  * Active Cloudflare public tunnel (`~/.config/molab/public_tunnel.json`, `~/.blackwell/active.json`, or live `cloudflared` process logs).
+  * Local HTTP gateway bridge (`http://127.0.0.1:8000`).
+  * Occupied Blackwell pod and active model catalog profile.
+* **Cheatsheets Provided:**
+  * Shell environment variables (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `MODEL_NAME`).
+  * cURL streaming test snippet.
+  * Python OpenAI SDK streaming snippet.
+  * Cursor IDE & VS Code settings.
+  * Claude Code CLI integration (`ANTHROPIC_BASE_URL`).
+* **Example:**
+  ```bash
+  # Display high-craft credentials card and client cheatsheets
+  molab credentials
+
+  # Or using shorthand alias
+  molab creds
+
+  # Automatically inject all credentials into current shell
+  eval $(molab creds -e)
+
+  # Machine-readable JSON output for automated scripting
+  molab creds --json
+  ```
+
+
 ---
 
 ## 5. System Diagnostics & Capabilities
