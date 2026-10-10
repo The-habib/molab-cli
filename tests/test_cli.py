@@ -98,7 +98,8 @@ def test_tui_non_tty_exit():
 def test_cli_annotations_resolve():
     import inspect
     from molab_cli.cli import cmd_chat
-    ann = inspect.get_annotations(cmd_chat)
+    assert cmd_chat.callback is not None
+    ann = inspect.get_annotations(cmd_chat.callback)
     assert "extra_args" in ann
 
 
