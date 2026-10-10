@@ -245,7 +245,29 @@ Unified Blackwell AI Bridge supporting both **Hermes Agent** (OpenAI `/v1/chat/c
   hermes -z "Check system architecture"
   ```
 
+### `molab share` (alias: `molab public`)
+Expose the deployed AI model with an instant, public, globally reachable HTTPS URL and credentials suite via Cloudflare Quick Tunnels.
+* **Options:**
+  * `--port <int>`: Local port to expose (Default: `8000`).
+  * `--status`: Check status and display active public credentials.
+  * `--stop`: Terminate running public tunnel daemon.
+  * `-j, --json`: Output credentials in JSON format.
+* **Credentials Provided:**
+  * Public Base URL: `https://<subdomain>.trycloudflare.com/v1`
+  * API Key: `sk-molab-blackwell-cluster` (or any string)
+  * Compatible Model Aliases: `huihui-ai/Qwen2.5-32B-Instruct-abliterated`, `claude-3-7-sonnet-20250219`, `qwen2.5-coder-32b-abliterated`
+  * Integration snippets for Python OpenAI SDK, cURL, Cursor, Cline, and desktop Claude Code.
+* **Example:**
+  ```bash
+  # Launch public endpoint and display credentials
+  molab share
 
+  # Check active public URL
+  molab share --status
+
+  # Stop public tunnel
+  molab share --stop
+  ```
 
 ---
 
