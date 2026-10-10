@@ -17,6 +17,7 @@ import time
 import tty
 import urllib.request
 import uuid
+import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
 import websockets
@@ -573,67 +574,31 @@ class SandboxSession:
             except Exception:
                 pass
         return {"choices": [{"message": {"content": raw}}]}
-
-    def stream_chat_completion(
-        self,
-        messages: List[Dict[str, str]],
-        max_tokens: int = 1024,
-        temperature: float = 0.7,
-        model: Optional[str] = None,
-    ):
-        """
-        Stream chat completion tokens and reasoning deltas in real-time from the pod.
-        Yields delta dicts: {'content': str, 'reasoning_content': str, 'raw': dict}
-        """
-        if not model:
-            model = self.get_active_model() or "default"
-
-        payload = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stream": True,
-        }
-        b64_body = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8")
-        cmd = f"echo '{b64_body}' | base64 -d | curl -N -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @-"
-
-        self.resolve()
-        uri = self.ws_terminal_url
-
-        async def _run_stream():
-            async with websockets.connect(uri) as ws:
-                await ws.send(f"{cmd}\n")
-                line_buffer = ""
-                while True:
-                    try:
-                        frame = await asyncio.wait_for(ws.recv(), timeout=20.0)
-                        clean = re.sub(r"\x1b\][^\x07\x1b]*\x07|\x1b\[[0-9;?]*[a-zA-Z]", "", frame)
-                        line_buffer += clean
-                        while "\n" in line_buffer:
-                            line, line_buffer = line_buffer.split("\n", 1)
-                            line = line.strip()
-                            if line.startswith("data: "):
-                                chunk_str = line[6:].strip()
-                                if chunk_str == "[DONE]":
-                                    return
-                                try:
-                                    data = json.loads(chunk_str)
-                                    choices = data.get("choices", [])
-                                    if choices:
-                                        delta = choices[0].get("delta", {})
-                                        content = delta.get("content", "")
-                                        reasoning = delta.get("reasoning_content", "")
-                                        if content or reasoning:
-                                            yield {
-                                                "content": content,
-                                                "reasoning_content": reasoning,
-                                                "raw": data,
-                                            }
-                                except Exception:
-                                    pass
-                    except asyncio.TimeoutError:
-                        break
+    async def _upload_temp_json_payload(self, json_bytes: bytes) -> str:
+        """Upload a JSON request payload to pod /tmp using native Marimo multipart upload."""
+        req_name = f"_req_{uuid.uuid4().hex[:8]}.json"
+        upload_url = f"{self.base_url}/api/files/create?token={self.auth_token}"
+        with tempfile.NamedTemporaryFile(delete=False) as tf:
+            tf.write(json_bytes)
+            tf_path = tf.name
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "curl", "-s", "-f", "-X", "POST", upload_url,
+                "-F", "path=/tmp",
+                "-F", "type=file",
+                "-F", f"name={req_name}",
+                "-F", f"file=@{tf_path}",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+        finally:
+            if os.path.exists(tf_path):
+                try:
+                    os.unlink(tf_path)
+                except OSError:
+                    pass
+        return req_name
 
     async def async_chat_completion(
         self,
@@ -661,18 +626,8 @@ class SandboxSession:
 
         self.resolve()
         json_bytes = json.dumps(payload).encode("utf-8")
-        if len(json_bytes) > 2500:
-            req_name = f"_req_{uuid.uuid4().hex[:8]}.json"
-            upload_url = f"{self.base_url}/api/files/create?token={self.auth_token}"
-            proc = await asyncio.create_subprocess_exec(
-                "curl", "-s", "-f", "-X", "POST", upload_url,
-                "-F", "path=/tmp", "-F", "type=file", "-F", f"name={req_name}",
-                "-F", "file=@-",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.communicate(input=json_bytes)
+        if len(json_bytes) > 1500:
+            req_name = await self._upload_temp_json_payload(json_bytes)
             cmd = f"curl -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @/tmp/{req_name} ; rm -f /tmp/{req_name}"
         else:
             b64_body = base64.b64encode(json_bytes).decode("utf-8")
@@ -713,18 +668,8 @@ class SandboxSession:
 
         self.resolve()
         json_bytes = json.dumps(payload).encode("utf-8")
-        if len(json_bytes) > 2500:
-            req_name = f"_req_{uuid.uuid4().hex[:8]}.json"
-            upload_url = f"{self.base_url}/api/files/create?token={self.auth_token}"
-            proc = await asyncio.create_subprocess_exec(
-                "curl", "-s", "-f", "-X", "POST", upload_url,
-                "-F", "path=/tmp", "-F", "type=file", "-F", f"name={req_name}",
-                "-F", "file=@-",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.communicate(input=json_bytes)
+        if len(json_bytes) > 1500:
+            req_name = await self._upload_temp_json_payload(json_bytes)
             cmd = f"curl -N -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @/tmp/{req_name} ; rm -f /tmp/{req_name}"
         else:
             b64_body = base64.b64encode(json_bytes).decode("utf-8")
