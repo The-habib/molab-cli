@@ -36,19 +36,58 @@ logger = logging.getLogger("molab_bridge")
 BRIDGE_PORT = int(os.getenv("BRIDGE_PORT", "8000"))
 app = FastAPI(title="MoLab Blackwell AI Bridge for Hermes Agent & Claude Code")
 
-# CORS middleware for Open WebUI, LibreChat, and browser integrations
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Standard CORS headers for browser web apps, Base44, Open WebUI, and external clients
+def get_cors_headers(origin: Optional[str] = None) -> Dict[str, str]:
+    target_origin = origin if origin and origin != "null" else "*"
+    return {
+        "Access-Control-Allow-Origin": target_origin,
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT, DELETE, PATCH",
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, x-api-key, anthropic-version, anthropic-beta, User-Agent, Accept, Cache-Control, X-Requested-With",
+        "Access-Control-Max-Age": "86400",
+        "Access-Control-Allow-Credentials": "true",
+    }
+
+
+@app.middleware("http")
+async def universal_cors_middleware(request: Request, call_next):
+    origin = request.headers.get("origin")
+    cors_headers = get_cors_headers(origin)
+
+    # 1. Unconditionally catch ALL preflight OPTIONS requests on any endpoint with 204 No Content
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=cors_headers)
+
+    # 2. Process request through downstream route
+    try:
+        response = await call_next(request)
+    except HTTPException as exc:
+        headers = {**cors_headers, **(getattr(exc, "headers", None) or {})}
+        content = exc.detail if isinstance(exc.detail, dict) else {"error": {"message": str(exc.detail), "code": exc.status_code}}
+        return JSONResponse(status_code=exc.status_code, content=content, headers=headers)
+    except Exception as exc:
+        headers = cors_headers.copy()
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"message": str(exc), "code": 500, "type": "internal_server_error"}},
+            headers=headers,
+        )
+
+    # 3. Always attach full CORS headers to every response (success, streaming SSE, error)
+    for k, v in cors_headers.items():
+        response.headers[k] = v
+    return response
+
+
+@app.options("/{rest_of_path:path}")
+async def wildcard_options_preflight(rest_of_path: str, request: Request):
+    """Direct route-level preflight responder guaranteeing 204 on every API endpoint."""
+    origin = request.headers.get("origin")
+    return Response(status_code=204, headers=get_cors_headers(origin))
 
 
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
-    headers = getattr(exc, "headers", None) or {}
+    headers = {**get_cors_headers(request.headers.get("origin")), **(getattr(exc, "headers", None) or {})}
     if isinstance(exc.detail, dict) and "error" in exc.detail:
         return JSONResponse(status_code=exc.status_code, content=exc.detail, headers=headers)
     return JSONResponse(
@@ -331,6 +370,64 @@ async def health():
         }
 
 
+# Comprehensive list of recognised model aliases and identifiers for auto-mapping
+KNOWN_MODEL_ALIASES = {
+    # Generic defaults & hardware aliases
+    "default", "auto", "local", "blackwell", "molab", "model", "active",
+    # OpenAI model IDs
+    "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
+    "o1", "o1-mini", "o3-mini", "chatgpt-4o-latest",
+    # Anthropic model IDs
+    "claude-sonnet-4-5-20250929", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022",
+    "claude-3-5-sonnet-20240620", "claude-3-opus-20240229", "claude-3-haiku-20240307",
+    "claude-opus-4-20250514", "claude-3-5-haiku-20241022",
+    # Open-source / Qwen / Llama / DeepSeek model IDs
+    "qwen-32b", "qwen2.5-32b-instruct-abliterated", "qwen2.5-coder-32b-abliterated",
+    "coder-32b", "qwen", "r1-32b", "deepseek-r1", "llama-70b", "llama-3.3-70b",
+    "deepseek-ai/deepseek-r1-distill-qwen-32b", "qwen/qwen2.5-32b-instruct",
+    "qwen/qwen2.5-coder-32b-instruct", "meta-llama/llama-3.3-70b-instruct",
+    "huihui-ai/qwen2.5-32b-instruct-abliterated",
+}
+
+
+def validate_and_resolve_model(req_model: Optional[str], active_model: str) -> str:
+    """
+    Validates model identifier against active model and known aliases.
+    If valid or recognized alias, returns active_model.
+    If completely unknown or garbage, raises HTTPException(404).
+    """
+    if not req_model:
+        return active_model
+
+    req_norm = req_model.strip().lower()
+    active_norm = active_model.strip().lower()
+
+    # Direct match or substring match against active model
+    if req_norm == active_norm or req_norm in active_norm or active_norm in req_norm:
+        return active_model
+
+    # Exact match in known aliases
+    if req_norm in KNOWN_MODEL_ALIASES:
+        return active_model
+
+    # Prefix or sub-phrase match (e.g. 'qwen2.5-32b', 'claude-3-7-sonnet')
+    for alias in KNOWN_MODEL_ALIASES:
+        if req_norm == alias or req_norm.startswith(alias) or alias.startswith(req_norm):
+            return active_model
+
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "error": {
+                "message": f"The model '{req_model}' does not exist or you do not have access to it.",
+                "type": "invalid_request_error",
+                "param": "model",
+                "code": 404,
+            }
+        },
+    )
+
+
 @app.get("/v1/models")
 @app.get("/models")
 async def list_models():
@@ -339,15 +436,19 @@ async def list_models():
     except Exception:
         model = "huihui-ai/Qwen2.5-32B-Instruct-abliterated"
 
+    now = int(time.time())
+    model_entries = [
+        {"id": model, "object": "model", "created": now, "owned_by": "molab", "display_name": f"{model} (Blackwell RTX PRO 6000)", "type": "model"},
+        {"id": "qwen-32b", "object": "model", "created": now, "owned_by": "molab", "display_name": "Qwen 2.5 32B Instruct", "type": "model"},
+        {"id": "coder-32b", "object": "model", "created": now, "owned_by": "molab", "display_name": "Qwen 2.5 Coder 32B", "type": "model"},
+        {"id": "gpt-4o", "object": "model", "created": now, "owned_by": "openai", "display_name": f"GPT-4o (Aliased to {model})", "type": "model"},
+        {"id": "claude-3-7-sonnet-20250219", "object": "model", "created": now, "owned_by": "anthropic", "display_name": "Claude 3.7 Sonnet (Thinking)", "type": "model"},
+        {"id": "claude-sonnet-4-5-20250929", "object": "model", "created": now, "owned_by": "anthropic", "display_name": f"Claude Sonnet 4.5 ({model} Blackwell)", "type": "model"},
+        {"id": "claude-opus-4-20250514", "object": "model", "created": now, "owned_by": "anthropic", "display_name": "Claude Opus 4 (Blackwell)", "type": "model"},
+    ]
     return {
-        "data": [
-            {"id": model, "display_name": f"{model} (Blackwell RTX PRO 6000)", "type": "model"},
-            {"id": "qwen2.5-coder-32b-abliterated", "display_name": "Qwen 2.5 Coder 32B Abliterated", "type": "model"},
-            {"id": "qwen2.5-32b-instruct-abliterated", "display_name": "Qwen 2.5 32B Instruct Abliterated", "type": "model"},
-            {"id": "claude-sonnet-4-5-20250929", "display_name": f"Claude Sonnet 4.5 ({model} Blackwell)", "type": "model"},
-            {"id": "claude-3-7-sonnet-20250219", "display_name": "Claude 3.7 Sonnet (Thinking)", "type": "model"},
-            {"id": "claude-opus-4-20250514", "display_name": "Claude Opus 4 (Blackwell)", "type": "model"},
-        ]
+        "object": "list",
+        "data": model_entries,
     }
 
 
@@ -376,6 +477,7 @@ async def messages_endpoint(request: Request):
 
     session, target_model = await get_active_session_async()
     req_model = body.get("model", "claude-sonnet-4-5-20250929")
+    target_model = validate_and_resolve_model(req_model, target_model)
     is_stream = bool(body.get("stream", False))
     max_tokens = body.get("max_tokens", 2048)
     temp = body.get("temperature", 0.7)
@@ -600,6 +702,7 @@ async def chat_completions_endpoint(request: Request):
     session, target_model = await get_active_session_async()
     is_stream = bool(body.get("stream", False))
     req_model = body.get("model", target_model)
+    target_model = validate_and_resolve_model(req_model, target_model)
     max_tokens = body.get("max_tokens", 2048)
     temperature = body.get("temperature", 0.7)
     messages = body.get("messages", [])

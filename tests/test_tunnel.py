@@ -94,3 +94,30 @@ def test_cli_share_status():
         assert res.exit_code == 0
         data = json.loads(res.output)
         assert data["public_url"] == "https://fake.trycloudflare.com"
+
+
+def test_start_tunnel_named_token():
+    with tempfile.TemporaryDirectory() as td:
+        cfg = os.path.join(td, "state.json")
+        mgr = PublicTunnelManager(config_file=cfg)
+        mock_proc = MagicMock()
+        mock_proc.pid = 4321
+        mock_proc.poll.return_value = None
+
+        with patch.object(mgr, "is_cloudflared_installed", return_value=True), \
+             patch.object(mgr, "stop", return_value=True), \
+             patch("subprocess.Popen", return_value=mock_proc) as mock_popen, \
+             patch("urllib.request.urlopen") as mock_url:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps({"model": "test-m"}).encode("utf-8")
+            mock_resp.__enter__.return_value = mock_resp
+            mock_url.return_value = mock_resp
+
+            state = mgr.start_tunnel(port=8000, tunnel_token="my-cf-token", hostname="ai.example.com", timeout=1.0)
+            assert state["public_url"] == "https://ai.example.com"
+            assert state["openai_base_url"] == "https://ai.example.com/v1"
+            assert mock_popen.called
+            call_cmd = mock_popen.call_args[0][0]
+            assert "run" in call_cmd
+            assert "--token" in call_cmd
+            assert "my-cf-token" in call_cmd

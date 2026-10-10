@@ -879,10 +879,11 @@ def cmd_bridge_stop():
 @cli.command("share")
 @click.option("--port", default=8000, help="Local port to share (default 8000)")
 @click.option("--token", default=None, help="Cloudflare Tunnel token for persistent custom domain")
+@click.option("--hostname", default=None, help="Custom hostname for named Cloudflare tunnel (e.g. ai.mydomain.com)")
 @click.option("--stop", is_flag=True, help="Stop active public tunnel")
 @click.option("--status", is_flag=True, help="Display status of active public tunnel")
 @click.option("-j", "--json", "as_json", is_flag=True, help="Output credentials as JSON")
-def cmd_share(port: int, token: Optional[str], stop: bool, status: bool, as_json: bool):
+def cmd_share(port: int, token: Optional[str], hostname: Optional[str], stop: bool, status: bool, as_json: bool):
     """Expose deployed model with a public HTTPS URL and client credentials."""
     from molab_cli.tunnel import PublicTunnelManager, render_credentials
     mgr = PublicTunnelManager()
@@ -910,7 +911,7 @@ def cmd_share(port: int, token: Optional[str], stop: bool, status: bool, as_json
 
     with console.status("[bold green]Creating public HTTPS tunnel via Cloudflare...[/bold green]"):
         try:
-            state = mgr.start_tunnel(port=port, tunnel_token=token)
+            state = mgr.start_tunnel(port=port, tunnel_token=token, hostname=hostname)
         except Exception as e:
             console.print(f"[red]Failed to create public tunnel:[/red] {e}")
             return
@@ -924,13 +925,14 @@ def cmd_share(port: int, token: Optional[str], stop: bool, status: bool, as_json
 @cli.command("public")
 @click.option("--port", default=8000, help="Local port to share (default 8000)")
 @click.option("--token", default=None, help="Cloudflare Tunnel token for persistent custom domain")
+@click.option("--hostname", default=None, help="Custom hostname for named Cloudflare tunnel (e.g. ai.mydomain.com)")
 @click.option("--stop", is_flag=True, help="Stop active public tunnel")
 @click.option("--status", is_flag=True, help="Display status of active public tunnel")
 @click.option("-j", "--json", "as_json", is_flag=True, help="Output credentials as JSON")
 @click.pass_context
-def cmd_public(ctx, port: int, token: Optional[str], stop: bool, status: bool, as_json: bool):
+def cmd_public(ctx, port: int, token: Optional[str], hostname: Optional[str], stop: bool, status: bool, as_json: bool):
     """Alias for 'molab share' to generate public model credentials."""
-    ctx.invoke(cmd_share, port=port, token=token, stop=stop, status=status, as_json=as_json)
+    ctx.invoke(cmd_share, port=port, token=token, hostname=hostname, stop=stop, status=status, as_json=as_json)
 
 
 @cli.group("keys")

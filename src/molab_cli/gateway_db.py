@@ -179,6 +179,28 @@ class GatewayDB:
             """, (prompt_tokens, completion_tokens, key_id))
             conn.commit()
 
+        # Append structured JSON entry to persistent log file for tailing
+        try:
+            log_dir = os.path.join(DB_DIR, "logs")
+            os.makedirs(log_dir, exist_ok=True)
+            log_file = os.path.join(log_dir, "gateway_requests.log")
+            log_entry = {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+                "req_id": req_id,
+                "key_id": key_id,
+                "endpoint": endpoint,
+                "model": model,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "ttft_ms": round(ttft_ms, 2),
+                "duration_ms": round(total_duration_ms, 2),
+                "status_code": status_code,
+            }
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(log_entry) + "\n")
+        except Exception:
+            pass
+
     def list_keys(self) -> List[Dict[str, Any]]:
         """List all registered API keys and usage statistics."""
         with self.get_connection() as conn:

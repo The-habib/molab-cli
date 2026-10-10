@@ -95,9 +95,12 @@ class PublicTunnelManager:
         port: int = 8000,
         background: bool = True,
         timeout: float = 15.0,
+        tunnel_token: Optional[str] = None,
+        hostname: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Launch Cloudflare Quick Tunnel forwarding to local port and discover public URL.
+        Launch Cloudflare Quick Tunnel or Named Tunnel forwarding to local port.
+        Supports custom domain with tunnel_token and hostname.
         Returns dictionary with URL and credentials metadata.
         """
         if not self.is_cloudflared_installed():
@@ -125,14 +128,23 @@ class PublicTunnelManager:
         log_path = os.path.join(TUNNEL_CONFIG_DIR, "tunnel.log")
         log_file = open(log_path, "w")
 
-        cmd = [
-            "cloudflared",
-            "tunnel",
-            "--url",
-            f"http://127.0.0.1:{port}",
-            "--metrics",
-            "127.0.0.1:0",
-        ]
+        if tunnel_token:
+            cmd = [
+                "cloudflared",
+                "tunnel",
+                "run",
+                "--token",
+                tunnel_token,
+            ]
+        else:
+            cmd = [
+                "cloudflared",
+                "tunnel",
+                "--url",
+                f"http://127.0.0.1:{port}",
+                "--metrics",
+                "127.0.0.1:0",
+            ]
 
         proc = subprocess.Popen(
             cmd,
@@ -142,31 +154,51 @@ class PublicTunnelManager:
             start_new_session=True,
         )
 
-        # Discover public URL from log output
         public_url = None
         deadline = time.time() + timeout
-        pattern = re.compile(r"https://[a-zA-Z0-9\-]+\.trycloudflare\.com")
 
-        while time.time() < deadline:
-            time.sleep(0.5)
-            if proc.poll() is not None:
+        if tunnel_token:
+            public_url = (hostname if hostname.startswith("http") else f"https://{hostname}") if hostname else None
+            named_conn_pattern = re.compile(r"Registered tunnel connection|Connection [a-f0-9\-]+ registered")
+            while time.time() < deadline:
+                time.sleep(0.5)
+                if proc.poll() is not None:
+                    log_file.close()
+                    with open(log_path, "r") as rf:
+                        err = rf.read()
+                    raise RuntimeError(f"cloudflared named tunnel exited unexpectedly: {err}")
+                if os.path.exists(log_path):
+                    with open(log_path, "r") as rf:
+                        content = rf.read()
+                        if named_conn_pattern.search(content):
+                            if not public_url:
+                                m = re.search(r"https://[a-zA-Z0-9\.\-]+\.[a-zA-Z]{2,}", content)
+                                public_url = m.group(0) if m else "https://custom-cloudflare-domain"
+                            break
+            if not public_url:
+                public_url = "https://custom-cloudflare-domain"
+        else:
+            pattern = re.compile(r"https://[a-zA-Z0-9\-]+\.trycloudflare\.com")
+            while time.time() < deadline:
+                time.sleep(0.5)
+                if proc.poll() is not None:
+                    log_file.close()
+                    with open(log_path, "r") as rf:
+                        err = rf.read()
+                    raise RuntimeError(f"cloudflared exited unexpectedly: {err}")
+
+                if os.path.exists(log_path):
+                    with open(log_path, "r") as rf:
+                        content = rf.read()
+                        m = pattern.search(content)
+                        if m:
+                            public_url = m.group(0)
+                            break
+
+            if not public_url:
+                proc.terminate()
                 log_file.close()
-                with open(log_path, "r") as rf:
-                    err = rf.read()
-                raise RuntimeError(f"cloudflared exited unexpectedly: {err}")
-
-            if os.path.exists(log_path):
-                with open(log_path, "r") as rf:
-                    content = rf.read()
-                    m = pattern.search(content)
-                    if m:
-                        public_url = m.group(0)
-                        break
-
-        if not public_url:
-            proc.terminate()
-            log_file.close()
-            raise TimeoutError("Timed out waiting for Cloudflare to assign a public tunnel URL.")
+                raise TimeoutError("Timed out waiting for Cloudflare to assign a public tunnel URL.")
 
         state = {
             "pid": proc.pid,
