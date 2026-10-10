@@ -19,8 +19,11 @@ import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 import uvicorn
 from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from molab_cli.gateway_db import default_gateway_db
+from molab_cli.rate_limiter import default_rate_limiter
 from molab_cli.sandbox import SandboxSession
 
 logging.basicConfig(
@@ -32,6 +35,87 @@ logger = logging.getLogger("molab_bridge")
 
 BRIDGE_PORT = int(os.getenv("BRIDGE_PORT", "8000"))
 app = FastAPI(title="MoLab Blackwell AI Bridge for Hermes Agent & Claude Code")
+
+# CORS middleware for Open WebUI, LibreChat, and browser integrations
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    headers = getattr(exc, "headers", None) or {}
+    if isinstance(exc.detail, dict) and "error" in exc.detail:
+        return JSONResponse(status_code=exc.status_code, content=exc.detail, headers=headers)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"message": str(exc.detail), "code": exc.status_code}},
+        headers=headers,
+    )
+
+
+def authenticate_and_rate_limit(request: Request, estimated_tokens: int = 100) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    """
+    Validate API key against GatewayDB and enforce per-key RPM / TPM limits.
+    Returns (key_record, rate_limit_headers).
+    Raises HTTPException(401) or HTTPException(429).
+    """
+    auth_header = request.headers.get("authorization", "")
+    api_key = None
+    if auth_header.startswith("Bearer "):
+        api_key = auth_header[7:].strip()
+    elif auth_header:
+        api_key = auth_header.strip()
+    elif "x-api-key" in request.headers:
+        api_key = request.headers["x-api-key"].strip()
+    elif "api_key" in request.query_params:
+        api_key = request.query_params["api_key"].strip()
+
+    client_host = request.client.host if request.client else "127.0.0.1"
+    is_local = client_host in ("127.0.0.1", "localhost", "::1", "testclient")
+    require_auth = os.getenv("MOLAB_GATEWAY_REQUIRE_AUTH", "1" if not is_local else "0") == "1"
+
+    if not api_key:
+        if require_auth:
+            raise HTTPException(
+                status_code=401,
+                detail={"error": {"message": "Missing API key. Provide Authorization header: 'Bearer sk-molab-...'", "type": "authentication_error", "code": 401}}
+            )
+        return {
+            "key_id": "key_default_master",
+            "name": "Local Master / Internal",
+            "key_prefix": "sk-molab-master...",
+            "rpm_limit": 6000,
+            "tpm_limit": 6000000,
+            "is_active": 1,
+        }, {}
+
+    key_record = default_gateway_db.validate_key(api_key)
+    if not key_record:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"message": "Invalid or revoked API key.", "type": "authentication_error", "code": 401}}
+        )
+
+    allowed, reason, rate_headers = default_rate_limiter.check_limit(
+        key_id=key_record["key_id"],
+        rpm_limit=key_record.get("rpm_limit", 60),
+        tpm_limit=key_record.get("tpm_limit", 60000),
+        estimated_tokens=estimated_tokens,
+    )
+
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail={"error": {"message": reason or "Rate limit exceeded", "type": "rate_limit_error", "code": 429}},
+            headers=rate_headers,
+        )
+
+    return key_record, rate_headers
 
 # Cached active session and model
 _cached_session: Optional[SandboxSession] = None
@@ -128,8 +212,10 @@ def convert_claude_to_openai(claude_req: Dict[str, Any], target_model: str) -> D
     tools = claude_req.get("tools", [])
     tools_prompt = ""
     if tools:
+        # Deterministically sort tools by name to guarantee prefix cache hits across turns
+        tools_sorted = sorted(tools, key=lambda x: x.get("name", ""))
         tools_desc = []
-        for t in tools:
+        for t in tools_sorted:
             name = t.get("name", "")
             desc = t.get("description", "")
             schema = t.get("input_schema", {})
@@ -297,7 +383,17 @@ async def messages_endpoint(request: Request):
     openai_payload = convert_claude_to_openai(body, target_model)
     messages = openai_payload["messages"]
 
-    logger.info(f"Claude Code request for [{req_model}] -> Pod [{session.notebook_id}] Model [{target_model}] (stream={is_stream})")
+    # Gateway Auth, Rate Limiting, and Metrics Auditing
+    total_chars = len(extract_system_prompt(body.get("system")))
+    for m in body.get("messages", []):
+        total_chars += len(extract_content_text(m.get("content")))
+    est_prompt_tokens = max(1, total_chars // 4)
+
+    start_time = time.time()
+    req_id = f"req_{uuid.uuid4().hex[:12]}"
+    key_record, rate_headers = authenticate_and_rate_limit(request, estimated_tokens=est_prompt_tokens)
+
+    logger.info(f"Claude Code request [{req_model} -> {target_model}] by key [{key_record.get('key_prefix', 'local')}] (stream={is_stream})")
 
     msg_id = f"msg_{uuid.uuid4().hex[:20]}"
 
@@ -314,6 +410,23 @@ async def messages_endpoint(request: Request):
         except Exception as e:
             logger.error(f"Chat completion failed: {e}")
             raw_text = f"Error querying Blackwell GPU model: {e}"
+
+        duration_ms = (time.time() - start_time) * 1000.0
+        out_tokens = len(raw_text.split())
+        try:
+            default_gateway_db.record_usage(
+                key_id=key_record["key_id"],
+                req_id=req_id,
+                endpoint="/v1/messages",
+                model=target_model,
+                prompt_tokens=est_prompt_tokens,
+                completion_tokens=out_tokens,
+                ttft_ms=duration_ms,
+                total_duration_ms=duration_ms,
+                status_code=200,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to record usage: {e}")
 
         tool_parsed = parse_tool_call(raw_text)
         if tool_parsed:
@@ -334,8 +447,8 @@ async def messages_endpoint(request: Request):
                 "content": content_blocks,
                 "stop_reason": "tool_use",
                 "stop_sequence": None,
-                "usage": {"input_tokens": len(str(messages)) // 4, "output_tokens": len(raw_text.split())}
-            })
+                "usage": {"input_tokens": est_prompt_tokens, "output_tokens": out_tokens}
+            }, headers=rate_headers)
         else:
             return JSONResponse({
                 "id": msg_id,
@@ -345,13 +458,13 @@ async def messages_endpoint(request: Request):
                 "content": [{"type": "text", "text": raw_text}],
                 "stop_reason": "end_turn",
                 "stop_sequence": None,
-                "usage": {"input_tokens": len(str(messages)) // 4, "output_tokens": len(raw_text.split())}
-            })
+                "usage": {"input_tokens": est_prompt_tokens, "output_tokens": out_tokens}
+            }, headers=rate_headers)
 
     # Streaming mode with real-time thinking and tool execution
     async def sse_generator():
         # 1. message_start
-        yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'model': req_model, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': len(str(messages)) // 4, 'output_tokens': 0}}})}\n\n"
+        yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'model': req_model, 'content': [], 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': est_prompt_tokens, 'output_tokens': 0}}})}\n\n"
         yield f"event: ping\ndata: {json.dumps({'type': 'ping'})}\n\n"
 
         from molab_cli.chat import StreamThoughtExtractor
@@ -360,6 +473,7 @@ async def messages_endpoint(request: Request):
         block_idx = 0
         full_response_acc: List[str] = []
         out_tokens_count = 0
+        first_token_time: Optional[float] = None
 
         def emit_events(ev_type: str, text: str) -> List[str]:
             nonlocal current_block_type, block_idx
@@ -399,6 +513,8 @@ async def messages_endpoint(request: Request):
                 temperature=temp,
                 model=target_model,
             ):
+                if first_token_time is None:
+                    first_token_time = time.time()
                 out_tokens_count += 1
                 token_text = delta_dict.get("content", "")
                 if token_text:
@@ -438,15 +554,34 @@ async def messages_endpoint(request: Request):
         else:
             yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': out_tokens_count}})}\n\n"
 
+        total_duration_ms = (time.time() - start_time) * 1000.0
+        ttft_ms = (first_token_time - start_time) * 1000.0 if first_token_time else total_duration_ms
+        try:
+            default_gateway_db.record_usage(
+                key_id=key_record["key_id"],
+                req_id=req_id,
+                endpoint="/v1/messages",
+                model=target_model,
+                prompt_tokens=est_prompt_tokens,
+                completion_tokens=out_tokens_count,
+                ttft_ms=ttft_ms,
+                total_duration_ms=total_duration_ms,
+                status_code=200,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to record usage: {e}")
+
         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
 
+    response_headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        **rate_headers,
+    }
     return StreamingResponse(
         sse_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive"
-        }
+        headers=response_headers,
     )
 
 
@@ -469,16 +604,21 @@ async def chat_completions_endpoint(request: Request):
     temperature = body.get("temperature", 0.7)
     messages = body.get("messages", [])
 
-    # Automatically remap any requested model alias to active Blackwell model
-    body["model"] = target_model
-    logger.info(f"OpenAI completion request [{req_model} -> {target_model}] (stream={is_stream})")
-
     # Dynamic context length protection: clamp max_tokens if prompt is large
     total_chars = sum(len(str(m.get("content", "") or "")) for m in messages)
     est_prompt_tokens = max(1, total_chars // 3)
     if est_prompt_tokens + max_tokens > 64000:
         max_tokens = max(256, 64000 - est_prompt_tokens)
         body["max_tokens"] = max_tokens
+
+    # Gateway Auth, Rate Limiting, and Metrics Auditing
+    start_time = time.time()
+    req_id = f"req_{uuid.uuid4().hex[:12]}"
+    key_record, rate_headers = authenticate_and_rate_limit(request, estimated_tokens=est_prompt_tokens)
+
+    # Automatically remap any requested model alias to active Blackwell model
+    body["model"] = target_model
+    logger.info(f"OpenAI completion request [{req_model} -> {target_model}] by key [{key_record.get('key_prefix', 'local')}] (stream={is_stream})")
 
     extra_payload = {k: v for k, v in body.items() if k not in ("messages", "max_tokens", "temperature", "model", "stream")}
 
@@ -493,13 +633,41 @@ async def chat_completions_endpoint(request: Request):
             )
             if isinstance(res, dict) and "model" in res:
                 res["model"] = req_model
-            return JSONResponse(res)
+
+            duration_ms = (time.time() - start_time) * 1000.0
+            comp_tokens = 0
+            if isinstance(res, dict):
+                comp_tokens = res.get("usage", {}).get("completion_tokens", 0)
+                if not comp_tokens:
+                    text = res.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    comp_tokens = len(text.split())
+            try:
+                default_gateway_db.record_usage(
+                    key_id=key_record["key_id"],
+                    req_id=req_id,
+                    endpoint="/v1/chat/completions",
+                    model=target_model,
+                    prompt_tokens=est_prompt_tokens,
+                    completion_tokens=comp_tokens,
+                    ttft_ms=duration_ms,
+                    total_duration_ms=duration_ms,
+                    status_code=200,
+                )
+            except Exception as e:
+                logger.debug(f"Failed to record usage: {e}")
+
+            return JSONResponse(res, headers=rate_headers)
         except Exception as e:
             logger.error(f"Chat completion error: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     async def openai_sse_generator():
+        # Emit SSE keep-alive comment immediately to prevent Cloudflare 100s proxy idle timeout
+        yield ": keep-alive\n\n"
         seen_finish_reason = False
+        first_token_time: Optional[float] = None
+        out_tokens_count = 0
+
         try:
             async for delta_dict in session.async_stream_chat_completion(
                 messages=messages,
@@ -508,6 +676,10 @@ async def chat_completions_endpoint(request: Request):
                 model=target_model,
                 extra_payload=extra_payload,
             ):
+                if first_token_time is None:
+                    first_token_time = time.time()
+                out_tokens_count += 1
+
                 raw = delta_dict.get("raw")
                 if raw:
                     if isinstance(raw, dict):
@@ -574,13 +746,70 @@ async def chat_completions_endpoint(request: Request):
             }
             yield f"data: {json.dumps(final_chunk)}\n\n"
 
+        total_duration_ms = (time.time() - start_time) * 1000.0
+        ttft_ms = (first_token_time - start_time) * 1000.0 if first_token_time else total_duration_ms
+        try:
+            default_gateway_db.record_usage(
+                key_id=key_record["key_id"],
+                req_id=req_id,
+                endpoint="/v1/chat/completions",
+                model=target_model,
+                prompt_tokens=est_prompt_tokens,
+                completion_tokens=out_tokens_count,
+                ttft_ms=ttft_ms,
+                total_duration_ms=total_duration_ms,
+                status_code=200,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to record usage: {e}")
+
         yield "data: [DONE]\n\n"
 
+    response_headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        **rate_headers,
+    }
     return StreamingResponse(
         openai_sse_generator(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
+        headers=response_headers,
     )
+
+
+@app.get("/v1/gateway/stats")
+@app.get("/stats")
+async def gateway_stats():
+    """Retrieve live Gateway performance, token metering, and latency analytics."""
+    analytics = default_gateway_db.get_analytics()
+    return JSONResponse(analytics)
+
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    """Prometheus-compatible scrape endpoint for metrics collection."""
+    analytics = default_gateway_db.get_analytics()
+    lines = [
+        "# HELP molab_gateway_requests_total Total API requests processed by gateway",
+        "# TYPE molab_gateway_requests_total counter",
+        f"molab_gateway_requests_total {analytics.get('total_requests', 0)}",
+        "# HELP molab_gateway_prompt_tokens_total Total prompt tokens processed",
+        "# TYPE molab_gateway_prompt_tokens_total counter",
+        f"molab_gateway_prompt_tokens_total {analytics.get('total_prompt_tokens', 0)}",
+        "# HELP molab_gateway_completion_tokens_total Total completion tokens generated",
+        "# TYPE molab_gateway_completion_tokens_total counter",
+        f"molab_gateway_completion_tokens_total {analytics.get('total_completion_tokens', 0)}",
+        "# HELP molab_gateway_avg_latency_ms Average request latency in milliseconds",
+        "# TYPE molab_gateway_avg_latency_ms gauge",
+        f"molab_gateway_avg_latency_ms {analytics.get('avg_latency_ms', 0.0)}",
+        "# HELP molab_gateway_avg_ttft_ms Average time to first token in milliseconds",
+        "# TYPE molab_gateway_avg_ttft_ms gauge",
+        f"molab_gateway_avg_ttft_ms {analytics.get('avg_ttft_ms', 0.0)}",
+        "# HELP molab_gateway_active_keys Number of active API keys",
+        "# TYPE molab_gateway_active_keys gauge",
+        f"molab_gateway_active_keys {analytics.get('active_keys_count', 1)}",
+    ]
+    return Response(content="\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
 
 
 def start_port_forwarder(source_port: int, target_port: int) -> None:

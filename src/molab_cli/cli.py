@@ -777,10 +777,11 @@ def cmd_bridge_stop():
 
 @cli.command("share")
 @click.option("--port", default=8000, help="Local port to share (default 8000)")
+@click.option("--token", default=None, help="Cloudflare Tunnel token for persistent custom domain")
 @click.option("--stop", is_flag=True, help="Stop active public tunnel")
 @click.option("--status", is_flag=True, help="Display status of active public tunnel")
 @click.option("-j", "--json", "as_json", is_flag=True, help="Output credentials as JSON")
-def cmd_share(port: int, stop: bool, status: bool, as_json: bool):
+def cmd_share(port: int, token: Optional[str], stop: bool, status: bool, as_json: bool):
     """Expose deployed model with a public HTTPS URL and client credentials."""
     from molab_cli.tunnel import PublicTunnelManager, render_credentials
     mgr = PublicTunnelManager()
@@ -808,7 +809,7 @@ def cmd_share(port: int, stop: bool, status: bool, as_json: bool):
 
     with console.status("[bold green]Creating public HTTPS tunnel via Cloudflare...[/bold green]"):
         try:
-            state = mgr.start_tunnel(port=port)
+            state = mgr.start_tunnel(port=port, tunnel_token=token)
         except Exception as e:
             console.print(f"[red]Failed to create public tunnel:[/red] {e}")
             return
@@ -821,13 +822,178 @@ def cmd_share(port: int, stop: bool, status: bool, as_json: bool):
 
 @cli.command("public")
 @click.option("--port", default=8000, help="Local port to share (default 8000)")
+@click.option("--token", default=None, help="Cloudflare Tunnel token for persistent custom domain")
 @click.option("--stop", is_flag=True, help="Stop active public tunnel")
 @click.option("--status", is_flag=True, help="Display status of active public tunnel")
 @click.option("-j", "--json", "as_json", is_flag=True, help="Output credentials as JSON")
 @click.pass_context
-def cmd_public(ctx, port: int, stop: bool, status: bool, as_json: bool):
+def cmd_public(ctx, port: int, token: Optional[str], stop: bool, status: bool, as_json: bool):
     """Alias for 'molab share' to generate public model credentials."""
-    ctx.invoke(cmd_share, port=port, stop=stop, status=status, as_json=as_json)
+    ctx.invoke(cmd_share, port=port, token=token, stop=stop, status=status, as_json=as_json)
+
+
+@cli.group("keys")
+def keys_group():
+    """Manage AI Gateway virtual API keys, quotas, and access governance."""
+    pass
+
+
+@keys_group.command("create")
+@click.argument("name")
+@click.option("--rpm", default=60, help="Requests Per Minute rate limit (default: 60)")
+@click.option("--tpm", default=60000, help="Tokens Per Minute rate limit (default: 60000)")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output as JSON")
+def cmd_keys_create(name: str, rpm: int, tpm: int, as_json: bool):
+    """Create a new virtual API key with custom rate and token limits."""
+    from molab_cli.gateway_db import default_gateway_db
+    raw_key, info = default_gateway_db.create_key(name=name, rpm_limit=rpm, tpm_limit=tpm)
+    if as_json:
+        payload = {**info, "raw_key": raw_key}
+        print(json.dumps(payload, indent=2))
+        return
+
+    console.print(Panel(
+        f"[bold green]✔ Virtual API Key Created Successfully![/bold green]\n\n"
+        f"[bold cyan]Key:[/bold cyan] [bold white]{raw_key}[/bold white]\n"
+        f"[dim](Save this key now — for security reasons, it cannot be displayed again.)[/dim]\n\n"
+        f"[bold]Name:[/bold] {info['name']}\n"
+        f"[bold]Key ID:[/bold] {info['key_id']}\n"
+        f"[bold]RPM Limit:[/bold] {info['rpm_limit']:,} req/min\n"
+        f"[bold]TPM Limit:[/bold] {info['tpm_limit']:,} tokens/min\n",
+        title="[bold blue]MoLab AI Gateway Key Governance[/bold blue]",
+        border_style="green",
+    ))
+
+
+@keys_group.command("list")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output as JSON")
+def cmd_keys_list(as_json: bool):
+    """List all registered virtual API keys and lifetime usage metrics."""
+    from molab_cli.gateway_db import default_gateway_db
+    keys = default_gateway_db.list_keys()
+    if as_json:
+        print(json.dumps(keys, indent=2))
+        return
+
+    if not keys:
+        console.print("[yellow]No virtual API keys found. Run 'molab keys create <name>' to create one.[/yellow]")
+        return
+
+    table = Table(title="MoLab AI Gateway Virtual Keys", box=box.ROUNDED)
+    table.add_column("Key ID", style="cyan")
+    table.add_column("Name", style="bold white")
+    table.add_column("Prefix", style="dim")
+    table.add_column("RPM Limit", justify="right")
+    table.add_column("TPM Limit", justify="right")
+    table.add_column("Requests", justify="right")
+    table.add_column("Tokens (In / Out)", justify="right")
+    table.add_column("Status", justify="center")
+
+    for k in keys:
+        status_badge = "[bold green]ACTIVE[/bold green]" if k.get("is_active") else "[bold red]REVOKED[/bold red]"
+        tok_str = f"{k.get('total_prompt_tokens', 0):,} / {k.get('total_completion_tokens', 0):,}"
+        table.add_row(
+            k.get("key_id", ""),
+            k.get("name", ""),
+            k.get("key_prefix", ""),
+            f"{k.get('rpm_limit', 0):,}",
+            f"{k.get('tpm_limit', 0):,}",
+            f"{k.get('total_requests', 0):,}",
+            tok_str,
+            status_badge,
+        )
+
+    console.print(table)
+
+
+@keys_group.command("revoke")
+@click.argument("key_id")
+def cmd_keys_revoke(key_id: str):
+    """Revoke and deactivate a virtual API key immediately."""
+    from molab_cli.gateway_db import default_gateway_db
+    success = default_gateway_db.revoke_key(key_id)
+    if success:
+        console.print(f"[green]✔ Key '{key_id}' has been revoked successfully.[/green]")
+    else:
+        console.print(f"[red]Error: Key '{key_id}' not found.[/red]")
+
+
+@cli.command("stats")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output metrics as JSON")
+@click.option("--limit", default=10, help="Number of recent request logs to display (default: 10)")
+def cmd_stats(as_json: bool, limit: int):
+    """Display real-time AI Gateway telemetry, latency, and request logs."""
+    from molab_cli.gateway_db import default_gateway_db
+    stats = default_gateway_db.get_analytics()
+    if as_json:
+        print(json.dumps(stats, indent=2))
+        return
+
+    total_reqs = stats.get("total_requests", 0)
+    p_tokens = stats.get("total_prompt_tokens", 0)
+    c_tokens = stats.get("total_completion_tokens", 0)
+    tot_tokens = p_tokens + c_tokens
+    avg_ttft = stats.get("avg_ttft_ms", 0.0)
+    avg_lat = stats.get("avg_latency_ms", 0.0)
+    active_keys = stats.get("active_keys_count", 0)
+
+    summary_text = (
+        f"[bold cyan]Total Requests:[/bold cyan] {total_reqs:,}        "
+        f"[bold cyan]Active Keys:[/bold cyan] {active_keys}        "
+        f"[bold cyan]Total Tokens:[/bold cyan] {tot_tokens:,} ({p_tokens:,} in / {c_tokens:,} out)\n"
+        f"[bold cyan]Avg Latency:[/bold cyan] {avg_lat:.1f} ms        "
+        f"[bold cyan]Avg TTFT:[/bold cyan] {avg_ttft:.1f} ms"
+    )
+    console.print(Panel(summary_text, title="[bold blue]MoLab Production AI Gateway Telemetry[/bold blue]", border_style="cyan"))
+
+    recent = stats.get("recent_requests", [])
+    if recent:
+        table = Table(title="Recent Request Audit Logs", box=box.ROUNDED)
+        table.add_column("Req ID", style="dim")
+        table.add_column("Key ID", style="cyan")
+        table.add_column("Model", style="bold")
+        table.add_column("Prompt Tok", justify="right")
+        table.add_column("Comp Tok", justify="right")
+        table.add_column("TTFT", justify="right")
+        table.add_column("Latency", justify="right")
+        table.add_column("Status", justify="center")
+
+        for r in recent[:limit]:
+            status_color = "green" if r.get("status_code", 200) < 400 else "red"
+            table.add_row(
+                r.get("req_id", "")[:12],
+                r.get("key_id", ""),
+                r.get("model", "").split("/")[-1],
+                f"{r.get('prompt_tokens', 0):,}",
+                f"{r.get('completion_tokens', 0):,}",
+                f"{r.get('ttft_ms', 0.0):.1f}ms",
+                f"{r.get('total_duration_ms', 0.0):.1f}ms",
+                f"[{status_color}]{r.get('status_code', 200)}[/{status_color}]",
+            )
+        console.print(table)
+
+
+@cli.command("analytics")
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output metrics as JSON")
+@click.option("--limit", default=10, help="Number of recent request logs to display")
+@click.pass_context
+def cmd_analytics(ctx, as_json: bool, limit: int):
+    """Alias for 'molab stats' — display AI Gateway usage metrics."""
+    ctx.invoke(cmd_stats, as_json=as_json, limit=limit)
+
+
+@cli.command("perf")
+@click.argument("notebook_id", required=False)
+@click.option("-j", "--json", "as_json", is_flag=True, help="Output performance telemetry as JSON")
+def cmd_perf(notebook_id: Optional[str], as_json: bool):
+    """Profile self-hosted model performance (Prefix Cache Hit Rate, TTFT, VRAM, GPU temps)."""
+    from molab_cli.perf import query_pod_performance, render_performance_dashboard
+    with console.status("[bold #00BD7D]Querying vLLM engine and Blackwell GPU telemetry...[/bold #00BD7D]"):
+        data = query_pod_performance(notebook_id=notebook_id)
+    if as_json:
+        print(json.dumps(data, indent=2))
+    else:
+        render_performance_dashboard(data)
 
 
 

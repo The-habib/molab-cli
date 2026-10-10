@@ -828,3 +828,65 @@ Launch the modern browser-based Web Control Center dashboard.
   # Run on custom port without opening browser:
   molab web --port 9000 --no-browser
   ```
+
+---
+
+## 18. Enterprise Self-Hosted Inference Telemetry & Control Plane (v2.5)
+
+### `molab perf [notebook_id]`
+Profile self-hosted model performance and efficiency using the exact metrics big AI brands track:
+* **Automatic Prefix Caching (APC) Hit Rate %**: Ratio of queried tokens retrieved instantaneously from GPU VRAM cache vs recomputed from scratch.
+* **Time To First Token (TTFT)**: Average response start latency in milliseconds.
+* **KV Cache Utilization %**: GPU GDDR7 VRAM allocated to cached context blocks.
+* **Hardware Telemetry**: Real-time VRAM allocation, GPU core utilization, temperature, and wattage.
+* **Flags:**
+  * `-j, --json`: Output machine-readable JSON metrics.
+* **Example:**
+  ```bash
+  molab perf
+  molab perf --json
+  ```
+
+### `molab keys <subcommand>`
+Manage virtual API keys with granular RPM (Requests Per Minute) and TPM (Tokens Per Minute) quotas:
+* **Subcommands:**
+  * `create <name>`: Create virtual API key (`--rpm <n>`, `--tpm <n>`, `-j, --json`).
+  * `list`: List all active keys and lifetime prompt/completion tokens.
+  * `revoke <key_id>`: Deactivate virtual key immediately.
+* **Example:**
+  ```bash
+  molab keys create "production-agent" --rpm 100 --tpm 100000
+  molab keys list
+  molab keys revoke key_bec3175bba79
+  ```
+
+### `molab stats` / `molab analytics`
+View real-time AI Gateway request audit logs, token metering (prompt + completion), average latency, and TTFT across all client sessions.
+* **Options:**
+  * `--limit <n>`: Number of recent request logs to display (default: 10).
+  * `-j, --json`: Output telemetry as JSON.
+* **Example:**
+  ```bash
+  molab stats
+  molab stats --limit 20
+  ```
+
+### `molab share [OPTIONS]` / `molab public [OPTIONS]`
+Expose local port 8000 bridge via Cloudflare Quick Tunnel or persistent Named Tunnel:
+* **Options:**
+  * `--port <int>`: Local port to expose (default: 8000).
+  * `--token <token>`: Cloudflare Tunnel token for persistent custom domains (e.g. `api.yourdomain.com`).
+  * `--status`: Check status of running tunnel daemon.
+  * `--stop`: Terminate running tunnel daemon.
+  * `-j, --json`: Output client credentials as JSON.
+* **Example:**
+  ```bash
+  # Zero-config quick tunnel:
+  molab share
+
+  # Persistent custom domain tunnel:
+  molab share --token eyJh...
+
+  # Check active tunnel:
+  molab share --status
+  ```
