@@ -596,31 +596,9 @@ def action_workloads(client: MoLabClient) -> None:
 
 def action_terminal_chat(notebook_id: str) -> None:
     """Interactive chat with deployed LLM."""
-    session = SandboxSession(notebook_id)
-    history: List[Dict[str, str]] = []
+    from molab_cli.chat import run_terminal_chat
+    run_terminal_chat(notebook_id=notebook_id)
 
-    console.print(Panel(
-        "Chatting with deployed 27B model on NVIDIA Blackwell GPU.\nType 'exit' to return.",
-        title="[bold green]MoLab LLM Chat[/bold green]",
-        border_style="green",
-    ))
-
-    while True:
-        user_input = questionary.text("You ❯", style=QUESTIONARY_STYLE).ask()
-        if not user_input or user_input.strip().lower() in ["exit", "quit", "q"]:
-            break
-
-        history.append({"role": "user", "content": user_input.strip()})
-        with console.status("[bold green]Blackwell generating response...[/bold green]"):
-            try:
-                res = session.chat_completion(history, max_tokens=512, temperature=0.7)
-                reply = res.get("choices", [{}])[0].get("message", {}).get("content", "")
-            except Exception as e:
-                render_error_card("Generation Error", str(e))
-                continue
-
-        history.append({"role": "assistant", "content": reply})
-        console.print(Panel(Markdown(reply), title="[bold green]Blackwell LLM[/bold green]", border_style="green"))
 
 
 def action_localhost_bridge(notebook_id: str) -> None:

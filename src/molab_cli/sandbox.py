@@ -472,16 +472,64 @@ class SandboxSession:
         except Exception:
             return 30, 100
 
+    def get_active_model(self) -> Optional[str]:
+        """Fetch the currently active model ID from the pod's vLLM / OpenAI server."""
+        raw = self.execute_command("curl -s http://127.0.0.1:8000/v1/models", timeout=6.0)
+        try:
+            idx = raw.find("{")
+            if idx != -1:
+                data = json.loads(raw[idx:])
+                models = data.get("data", [])
+                if models and "id" in models[0]:
+                    return models[0]["id"]
+        except Exception:
+            pass
+        return None
+
+    @classmethod
+    def discover_active_pod(cls, client: Optional[Any] = None) -> Optional[str]:
+        """Auto-discover the running or free GPU pod in the user's workspace."""
+        from molab_cli.client import MoLabClient
+        c = client or MoLabClient()
+        try:
+            free_info = c.get_free_pod()
+            if free_info and free_info.get("recommended_free_pod"):
+                return free_info["recommended_free_pod"]
+        except Exception:
+            pass
+
+        try:
+            running = c.list_running_sandboxes()
+            if running:
+                return running[0].get("notebook_id")
+        except Exception:
+            pass
+
+        try:
+            nbs = c.list_notebooks()
+            for nb in nbs:
+                if nb.get("is_running") or nb.get("sandbox_id"):
+                    return nb.get("id")
+            if nbs:
+                return nbs[0].get("id")
+        except Exception:
+            pass
+        return None
+
     def chat_completion(
         self,
         messages: List[Dict[str, str]],
         max_tokens: int = 512,
         temperature: float = 0.7,
-        model: str = "gemma-3-27b-it-abliterated",
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Query the OpenAI-compatible model server running inside the cloud pod.
+        Auto-detects active model if not specified.
         """
+        if not model:
+            model = self.get_active_model() or "default"
+
         payload = {
             "model": model,
             "messages": messages,
@@ -500,23 +548,109 @@ class SandboxSession:
                 pass
         return {"choices": [{"message": {"content": raw}}]}
 
+    def stream_chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        model: Optional[str] = None,
+    ):
+        """
+        Stream chat completion tokens and reasoning deltas in real-time from the pod.
+        Yields delta dicts: {'content': str, 'reasoning_content': str, 'raw': dict}
+        """
+        if not model:
+            model = self.get_active_model() or "default"
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        b64_body = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8")
+        cmd = f"echo '{b64_body}' | base64 -d | curl -N -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @-"
+
+        self.resolve()
+        uri = self.ws_terminal_url
+
+        async def _run_stream():
+            async with websockets.connect(uri) as ws:
+                await ws.send(f"{cmd}\n")
+                line_buffer = ""
+                while True:
+                    try:
+                        frame = await asyncio.wait_for(ws.recv(), timeout=20.0)
+                        clean = re.sub(r"\x1b\][^\x07\x1b]*\x07|\x1b\[[0-9;?]*[a-zA-Z]", "", frame)
+                        line_buffer += clean
+                        while "\n" in line_buffer:
+                            line, line_buffer = line_buffer.split("\n", 1)
+                            line = line.strip()
+                            if line.startswith("data: "):
+                                chunk_str = line[6:].strip()
+                                if chunk_str == "[DONE]":
+                                    return
+                                try:
+                                    data = json.loads(chunk_str)
+                                    choices = data.get("choices", [])
+                                    if choices:
+                                        delta = choices[0].get("delta", {})
+                                        content = delta.get("content", "")
+                                        reasoning = delta.get("reasoning_content", "")
+                                        if content or reasoning:
+                                            yield {
+                                                "content": content,
+                                                "reasoning_content": reasoning,
+                                                "raw": data,
+                                            }
+                                except Exception:
+                                    pass
+                    except asyncio.TimeoutError:
+                        break
+
+        # Async generator wrapper for sync/async usage
+        loop = asyncio.new_event_loop()
+        try:
+            gen = _run_stream()
+            while True:
+                try:
+                    delta = loop.run_until_complete(gen.__anext__())
+                    yield delta
+                except StopAsyncIteration:
+                    break
+        finally:
+            loop.close()
+
     def ensure_model_server_running(self) -> bool:
         """
         Check if the OpenAI-compatible model server is running on the pod;
         if stopped, launch it and wait for it to become healthy.
         """
-        raw = self.execute_command("curl -s http://127.0.0.1:8000/health", timeout=6.0)
-        if "healthy" in raw:
+        status_code = self.execute_command(
+            "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health 2>/dev/null", timeout=6.0
+        ).strip()
+        if status_code in ("200", "OK") or "healthy" in status_code:
             return True
 
-        self.execute_command("bash /workspace/start.sh 2>/dev/null || bash /marimo/start_server.sh", timeout=15.0)
-        deadline = time.time() + 35
+        if self.get_active_model():
+            return True
+
+        self.execute_command(
+            "nohup python3 /workspace/run_qwen.py > /workspace/qwen_server.log 2>&1 & "
+            "|| bash /workspace/start.sh 2>/dev/null || bash /marimo/start_server.sh 2>/dev/null",
+            timeout=15.0,
+        )
+        deadline = time.time() + 45
         while time.time() < deadline:
-            time.sleep(2.0)
-            raw = self.execute_command("curl -s http://127.0.0.1:8000/health", timeout=6.0)
-            if "healthy" in raw:
+            time.sleep(3.0)
+            status_code = self.execute_command(
+                "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/health 2>/dev/null", timeout=6.0
+            ).strip()
+            if status_code in ("200", "OK") or self.get_active_model():
                 return True
         return False
+
 
 
 class LocalHttpForwarder:

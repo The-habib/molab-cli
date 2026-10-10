@@ -174,6 +174,46 @@ Bridge the pod's model server (port 8000) to localhost (`http://127.0.0.1:8000/v
   molab forward nb_xxx --port 8000
   ```
 
+### `molab chat [notebook_id] [OPTIONS]`
+Launch an industry-grade interactive terminal AI agent with real-time token streaming, thinking/reasoning decomposition (`<think>` tags and native `reasoning_content`), prompt history, live speed metrics, and slash commands.
+* **Arguments:**
+  * `[notebook_id]`: Cloud notebook ID (Optional; auto-discovers active Blackwell pod if omitted).
+* **Options:**
+  * `--think [full|compact|off]`: Reasoning display mode (Default: `full`).
+    * `full`: Live thinking process box with token counter and stopwatch.
+    * `compact`: Live pulse spinner collapsing into `💭 Thought for X.Xs (Y tokens)`.
+    * `off`: Hides thinking process, rendering final answer directly.
+  * `--max-tokens <int>`: Maximum tokens to generate per response (Default: 1024).
+  * `--temp <float>`: Sampling temperature (Default: 0.7).
+  * `--model <str>`: Target model identifier (Auto-detected from pod's `/v1/models` if omitted).
+  * `--system <str>`: Custom system prompt.
+* **Interactive Slash Commands:**
+  * `/help`: Display command cheatsheet.
+  * `/clear`: Clear conversation history and reset memory.
+  * `/think [full|compact|off]`: Toggle thinking display mode dynamically.
+  * `/gpu`: Query live Blackwell GPU telemetry (allocated VRAM, temperature, SM usage).
+  * `/model`: Inspect active model ID, parameters, context window, and port.
+  * `/temp <0.0-2.0>`: Adjust sampling temperature on the fly.
+  * `/tokens <int>`: Adjust max tokens on the fly.
+  * `/system [prompt]`: View or update system prompt.
+  * `/save [file.md]`: Export conversation transcript to Markdown file.
+  * `/copy`: Display last assistant response for easy clipboard copy.
+  * `/exit`, `/quit`: Clean exit.
+* **Keyboard Shortcuts:**
+  * `Ctrl+C`: Cleanly cancels active model generation without exiting the session.
+* **Example:**
+  ```bash
+  # Launch with auto-discovered Blackwell pod:
+  molab chat
+
+  # Launch specific pod with compact reasoning mode:
+  molab chat nb_emuqXoWkVed6jPNZxND7eo --think compact
+
+  # Launch with creative temperature:
+  molab chat --temp 0.85
+  ```
+
+
 ---
 
 ## 5. System Diagnostics & Capabilities

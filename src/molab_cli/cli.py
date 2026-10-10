@@ -735,59 +735,31 @@ def cmd_forward(notebook_id: str, port: int):
 
 
 @cli.command("chat")
-@click.argument("notebook_id")
-@click.option("--max-tokens", default=512, help="Max tokens to generate")
-@click.option("--temp", default=0.7, help="Sampling temperature")
-def cmd_chat(notebook_id: str, max_tokens: int, temp: float):
-    """Interactive streaming chat with the 27B unrestricted model directly in terminal."""
-    session = SandboxSession(notebook_id)
-    with console.status("[bold green]Connecting to 27B model on Blackwell pod...[/bold green]"):
-        try:
-            if not session.ensure_model_server_running():
-                console.print("[red]Could not verify model server on pod. Ensure server is started with:[/red]")
-                console.print("[dim]molab exec " + notebook_id + " '/marimo/start_server.sh'[/dim]")
-                return
-        except Exception as e:
-            console.print(f"[red]Connection error:[/red] {e}")
-            return
+@click.argument("notebook_id", required=False)
+@click.option("--max-tokens", default=1024, help="Max tokens to generate (default: 1024)")
+@click.option("--temp", default=0.7, help="Sampling temperature (default: 0.7)")
+@click.option("--think", "think_mode", type=click.Choice(["full", "compact", "off"]), default="full", help="Thinking display mode: full, compact, or off")
+@click.option("--model", "model_name", default=None, help="Target model identifier (auto-detected if omitted)")
+@click.option("--system", "system_prompt", default=None, help="Custom system prompt")
+def cmd_chat(
+    notebook_id: Optional[str],
+    max_tokens: int,
+    temp: float,
+    think_mode: str,
+    model_name: Optional[str],
+    system_prompt: Optional[str],
+):
+    """Industry-grade interactive terminal chat with real-time thinking and streaming."""
+    from molab_cli.chat import run_terminal_chat
+    run_terminal_chat(
+        notebook_id=notebook_id,
+        max_tokens=max_tokens,
+        temperature=temp,
+        think_mode=think_mode,
+        system_prompt=system_prompt,
+        model_name=model_name,
+    )
 
-    console.print(Panel(
-        "[bold green]Connected to Gemma 3 27B Abliterated (Unrestricted / Uncompressed)[/bold green]\n"
-        "Hardware: [bold]NVIDIA RTX PRO 6000 Blackwell (94.97 GB VRAM)[/bold]\n"
-        "Type your message and press Enter. Type [bold red]exit[/bold red] or [bold red]/quit[/bold red] to end.",
-        title="Interactive Terminal Chat",
-        border_style="green"
-    ))
-
-    history = []
-    while True:
-        try:
-            user_input = console.input("\n[bold cyan]User > [/bold cyan]").strip()
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Session closed.[/dim]")
-            break
-
-        if not user_input:
-            continue
-        if user_input.lower() in ("exit", "quit", "/exit", "/quit"):
-            console.print("[dim]Goodbye![/dim]")
-            break
-
-        history.append({"role": "user", "content": user_input})
-        with console.status("[bold green]Generating response on Blackwell GPU...[/bold green]"):
-            try:
-                res = session.chat_completion(history, max_tokens=max_tokens, temperature=temp)
-                reply = res.get("choices", [{}])[0].get("message", {}).get("content", "")
-            except Exception as e:
-                console.print(f"[red]Generation failed:[/red] {e}")
-                continue
-
-        history.append({"role": "assistant", "content": reply})
-        console.print(Panel(
-            Markdown(reply),
-            title="[bold green]Gemma 3 27B[/bold green]",
-            border_style="green",
-        ))
 
 
 @cli.command("doctor")
