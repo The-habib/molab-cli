@@ -38,6 +38,17 @@ QUESTIONARY_STYLE = Style([
     ("disabled", "fg:#475569 italic"),
 ])
 
+
+def mask_secret(value: Optional[str], show_prefix: int = 8, show_suffix: int = 4) -> str:
+    """Mask sensitive tokens and keys for safe display in terminal and logs."""
+    if not value:
+        return "None"
+    s = str(value).strip()
+    if len(s) <= (show_prefix + show_suffix + 3):
+        return "***"
+    return f"{s[:show_prefix]}...{s[-show_suffix:]}"
+
+
 # Modernized ASCII Banner
 BANNER_ASCII = r"""
  ███╗   ███╗ ██████╗ ██╗      █████╗ ██████╗ 

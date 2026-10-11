@@ -30,10 +30,16 @@ def load_config() -> Dict[str, Any]:
 
 
 def save_config(cfg: Dict[str, Any]) -> None:
-    """Save configuration dictionary to disk."""
+    """Save configuration dictionary to disk with secure permissions."""
+    import sys
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
+    try:
+        if sys.platform != "win32":
+            CONFIG_FILE.chmod(0o600)
+    except Exception:
+        pass
 
 
 def get_config_dir() -> Path:

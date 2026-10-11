@@ -9,15 +9,15 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Version-v2.4.0-blue.svg" alt="Version"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Engine-Anti--Idle%20%26%20Multi--Pod%20Orchestrator%20v2.4-0ea5e9.svg" alt="Orchestration"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Version-v2.5.0-blue.svg" alt="Version"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Engine-Anti--Idle%20%26%20Multi--Pod%20Orchestrator%20v2.5-0ea5e9.svg" alt="Orchestration"></a>
   <a href="#"><img src="https://img.shields.io/badge/GPU-NVIDIA%20Blackwell%20(96GB%20VRAM)-76b900.svg" alt="GPU"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Transfer-Native%20HTTP%2F2%20Streaming-success.svg" alt="File Transfer"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Jobs-SQLite%20DAG%20%26%20Batch%20Queue-orange.svg" alt="Jobs"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Transfer-Native%20HTTP%20SSE%20Streaming-success.svg" alt="File Transfer"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Jobs-SQLite%20WAL%20DAG%20%26%20Batch%20Queue-orange.svg" alt="Jobs"></a>
   <a href="#"><img src="https://img.shields.io/badge/Persistence-100%25%20On--MoLab%20Vault%20%26%20Keepalive-emerald.svg" alt="Persistence"></a>
   <a href="#"><img src="https://img.shields.io/badge/Agent%20Ready-MCP%20JSON--RPC%202.0%20(48%20Tools)-purple.svg" alt="MCP"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Tests-179%20Passed%20(100%25)-success.svg" alt="Tests"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Platform-Termux%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tests-210%20Passed%20(100%25)-success.svg" alt="Tests"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Platform-Termux%20%7C%20Linux%20%7C%20macOS%20%7C%20Windows-informational.svg" alt="Platform"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
 </p>

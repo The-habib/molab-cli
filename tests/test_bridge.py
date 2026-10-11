@@ -83,6 +83,20 @@ def test_parse_tool_call_json_block():
     assert parsed["arguments"] == {"file": "test.py"}
 
 
+def test_parse_tool_call_reversed_keys():
+    text = "Here is the call:\n```json\n{\"arguments\": {\"cmd\": \"ls\"}, \"name\": \"Bash\"}\n```"
+    parsed = parse_tool_call(text)
+    assert parsed is not None
+    assert parsed["name"] == "Bash"
+    assert parsed["arguments"] == {"cmd": "ls"}
+
+
+def test_parse_tool_call_non_tool_ignored():
+    text = "Here is sample user json:\n```json\n{\"name\": \"Alice\", \"age\": 30}\n```"
+    parsed = parse_tool_call(text)
+    assert parsed is None
+
+
 def test_bridge_health_endpoint():
     from unittest.mock import AsyncMock
     client = TestClient(app)

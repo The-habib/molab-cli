@@ -25,17 +25,8 @@ def check_tool_available(tool_name: str) -> bool:
 
 def check_local_disk_space(path: str = ".") -> Dict[str, Any]:
     """Inspect local storage available in MB/GB."""
-    try:
-        stat = os.statvfs(path)
-        free_bytes = stat.f_bavail * stat.f_frsize
-        total_bytes = stat.f_blocks * stat.f_frsize
-        return {
-            "status": "confirmed",
-            "free_gb": round(free_bytes / (1024**3), 2),
-            "total_gb": round(total_bytes / (1024**3), 2),
-        }
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    from molab_cli.compat import get_disk_space
+    return get_disk_space(path)
 
 
 def discover_capabilities(client: Optional[MoLabClient] = None) -> Dict[str, Any]:

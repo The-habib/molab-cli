@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from molab_cli.cli import cli
 
 
-def test_cli_batch_validate_valid():
+def test_cli_batch_validate_valid(tmp_path):
     runner = CliRunner()
     manifest = {
         "version": "1.0",
@@ -22,16 +22,15 @@ def test_cli_batch_validate_valid():
         ],
     }
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as tmp:
-        json.dump(manifest, tmp)
-        tmp.flush()
+    manifest_file = tmp_path / "valid.json"
+    manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
 
-        result = runner.invoke(cli, ["batch", "validate", tmp.name])
-        assert result.exit_code == 0
-        assert "Manifest is valid" in result.output
+    result = runner.invoke(cli, ["batch", "validate", str(manifest_file)])
+    assert result.exit_code == 0
+    assert "Manifest is valid" in result.output
 
 
-def test_cli_batch_validate_json():
+def test_cli_batch_validate_json(tmp_path):
     runner = CliRunner()
     manifest = {
         "version": "1.0",
@@ -39,18 +38,17 @@ def test_cli_batch_validate_json():
         "tasks": [{"id": "t1", "command": "echo 1"}],
     }
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as tmp:
-        json.dump(manifest, tmp)
-        tmp.flush()
+    manifest_file = tmp_path / "manifest.json"
+    manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
 
-        result = runner.invoke(cli, ["batch", "validate", tmp.name, "--json"])
-        assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert data["valid"] is True
-        assert data["task_count"] == 1
+    result = runner.invoke(cli, ["batch", "validate", str(manifest_file), "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["valid"] is True
+    assert data["task_count"] == 1
 
 
-def test_cli_batch_validate_invalid():
+def test_cli_batch_validate_invalid(tmp_path):
     runner = CliRunner()
     manifest = {
         "version": "1.0",
@@ -59,16 +57,15 @@ def test_cli_batch_validate_invalid():
         ],
     }
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as tmp:
-        json.dump(manifest, tmp)
-        tmp.flush()
+    manifest_file = tmp_path / "invalid.json"
+    manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
 
-        result = runner.invoke(cli, ["batch", "validate", tmp.name])
-        assert result.exit_code == 0
-        assert "validation failed" in result.output
+    result = runner.invoke(cli, ["batch", "validate", str(manifest_file)])
+    assert result.exit_code == 0
+    assert "validation failed" in result.output
 
 
-def test_cli_batch_submit_and_status():
+def test_cli_batch_submit_and_status(tmp_path):
     runner = CliRunner()
     manifest = {
         "version": "1.0",
@@ -76,20 +73,19 @@ def test_cli_batch_submit_and_status():
         "tasks": [{"id": "t1", "command": "echo test"}],
     }
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as tmp:
-        json.dump(manifest, tmp)
-        tmp.flush()
+    manifest_file = tmp_path / "submit.json"
+    manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
 
-        submit_res = runner.invoke(cli, ["batch", "submit", tmp.name, "--json"])
-        assert submit_res.exit_code == 0
-        submit_data = json.loads(submit_res.output)
-        batch_id = submit_data["batch_id"]
+    submit_res = runner.invoke(cli, ["batch", "submit", str(manifest_file), "--json"])
+    assert submit_res.exit_code == 0
+    submit_data = json.loads(submit_res.output)
+    batch_id = submit_data["batch_id"]
 
-        status_res = runner.invoke(cli, ["batch", "status", batch_id, "--json"])
-        assert status_res.exit_code == 0
-        status_data = json.loads(status_res.output)
-        assert status_data["id"] == batch_id
-        assert status_data["name"] == "submit-test"
+    status_res = runner.invoke(cli, ["batch", "status", batch_id, "--json"])
+    assert status_res.exit_code == 0
+    status_data = json.loads(status_res.output)
+    assert status_data["id"] == batch_id
+    assert status_data["name"] == "submit-test"
 
 
 def test_cli_batch_list():

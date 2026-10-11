@@ -10,6 +10,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import time
 import urllib.request
 from typing import Any, Dict, Optional, Tuple
@@ -17,6 +18,10 @@ from typing import Any, Dict, Optional, Tuple
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+
+from molab_cli.logger import get_logger
+
+logger = get_logger("tunnel")
 
 console = Console()
 
@@ -38,11 +43,24 @@ class PublicTunnelManager:
 
     def _has_running_cloudflared(self) -> bool:
         """Check if any cloudflared tunnel process is currently running."""
+        if sys.platform == "win32":
+            res = subprocess.run(["tasklist", "/FI", "IMAGENAME eq cloudflared.exe", "/NH"], capture_output=True, text=True)
+            return "cloudflared.exe" in res.stdout.lower()
         res = subprocess.run(["pgrep", "-f", "cloudflared tunnel"], capture_output=True, text=True)
         return res.returncode == 0 and bool(res.stdout.strip())
 
     def _get_cloudflared_pid(self) -> Optional[int]:
         """Get PID of running cloudflared process."""
+        if sys.platform == "win32":
+            res = subprocess.run(["tasklist", "/FI", "IMAGENAME eq cloudflared.exe", "/FO", "CSV", "/NH"], capture_output=True, text=True)
+            for line in res.stdout.splitlines():
+                parts = line.strip().split(",")
+                if len(parts) >= 2 and "cloudflared" in parts[0].lower():
+                    try:
+                        return int(parts[1].strip('"'))
+                    except ValueError:
+                        pass
+            return None
         res = subprocess.run(["pgrep", "-f", "cloudflared tunnel"], capture_output=True, text=True)
         if res.returncode == 0 and res.stdout.strip():
             try:
@@ -63,8 +81,8 @@ class PublicTunnelManager:
                     return data
                 elif not self._has_running_cloudflared():
                     self.cleanup()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed reading tunnel config file %s: %s", self.config_file, e)
 
         if self.config_file != TUNNEL_STATE_FILE:
             return None
@@ -92,11 +110,11 @@ class PublicTunnelManager:
                     try:
                         with open(self.config_file, "w") as f:
                             json.dump(state, f, indent=2)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed saving tunnel state to %s: %s", self.config_file, e)
                     return state
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed reading blackwell active.json: %s", e)
 
         # 3. Running cloudflared process inspection from log files
         if self._has_running_cloudflared():
@@ -126,11 +144,11 @@ class PublicTunnelManager:
                             try:
                                 with open(self.config_file, "w") as f:
                                     json.dump(state, f, indent=2)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug("Failed saving discovered tunnel state: %s", e)
                             return state
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed reading tunnel candidate log %s: %s", log_cand, e)
 
         return None
 
@@ -156,7 +174,16 @@ class PublicTunnelManager:
         if not active:
             self.cleanup()
             # Also catch any stray cloudflared processes
-            subprocess.run(["pkill", "-f", "cloudflared tunnel"], stderr=subprocess.DEVNULL)
+            if sys.platform != "win32":
+                try:
+                    subprocess.run(["pkill", "-f", "cloudflared tunnel"], stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            else:
+                try:
+                    subprocess.run(["taskkill", "/F", "/IM", "cloudflared.exe"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                except Exception:
+                    pass
             return False
 
         pid = active.get("pid")
@@ -165,10 +192,17 @@ class PublicTunnelManager:
                 os.kill(pid, signal.SIGTERM)
                 time.sleep(0.5)
                 if self._is_pid_alive(pid):
-                    os.kill(pid, signal.SIGKILL)
+                    sig_kill = getattr(signal, "SIGKILL", signal.SIGTERM)
+                    os.kill(pid, sig_kill)
             except Exception:
                 pass
-        subprocess.run(["pkill", "-f", "cloudflared tunnel"], stderr=subprocess.DEVNULL)
+        try:
+            if sys.platform != "win32":
+                subprocess.run(["pkill", "-f", "cloudflared tunnel"], stderr=subprocess.DEVNULL)
+            else:
+                subprocess.run(["taskkill", "/F", "/IM", "cloudflared.exe"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        except Exception:
+            pass
         self.cleanup()
         return True
 
@@ -228,13 +262,22 @@ class PublicTunnelManager:
                 "127.0.0.1:0",
             ]
 
-        proc = subprocess.Popen(
-            cmd,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-            start_new_session=True,
-        )
+        popen_kwargs: Dict[str, Any] = {
+            "stdout": log_file,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+        }
+        if sys.platform == "win32":
+            flags = 0
+            if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+            if hasattr(subprocess, "DETACHED_PROCESS"):
+                flags |= subprocess.DETACHED_PROCESS
+            popen_kwargs["creationflags"] = flags
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        proc = subprocess.Popen(cmd, **popen_kwargs)
 
         public_url = None
         deadline = time.time() + timeout

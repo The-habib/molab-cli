@@ -38,26 +38,8 @@ def get_keepalive_log_path(notebook_id: str) -> str:
 
 def is_keepalive_process(pid: int, notebook_id: Optional[str] = None) -> bool:
     """Verify if process with given PID is actually a running molab keepalive daemon."""
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-
-    cmdline_path = f"/proc/{pid}/cmdline"
-    if not os.path.exists(cmdline_path):
-        return True
-
-    try:
-        with open(cmdline_path, "rb") as f:
-            raw = f.read()
-            cmdline = raw.decode("utf-8", errors="ignore").replace("\x00", " ")
-        if ("python" in cmdline or "molab" in cmdline) and ("keepalive" in cmdline or "molab_cli" in cmdline):
-            return True
-        return False
-    except (OSError, IOError):
-        return True
+    from molab_cli.compat import is_pid_cmdline_matching
+    return is_pid_cmdline_matching(pid, ["keepalive", "molab_cli", "molab"])
 
 
 class KeepaliveError(MoLabError):
@@ -72,12 +54,14 @@ class KeepaliveManager:
 
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or get_default_db_path()
+        dir_name = os.path.dirname(self.db_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         self._init_db()
 
-    def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _get_conn(self):
+        from molab_cli.db import db_session
+        return db_session(self.db_path, timeout=15.0, wal_mode=True)
 
     def _init_db(self) -> None:
         with self._get_conn() as conn:
@@ -149,13 +133,22 @@ class KeepaliveManager:
         log_f = open(log_path, "a", encoding="utf-8")
 
         # Spawn detached background process surviving terminal disconnects
-        proc = subprocess.Popen(
-            cmd,
-            stdout=log_f,
-            stderr=log_f,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        popen_kwargs: Dict[str, Any] = {
+            "stdout": log_f,
+            "stderr": log_f,
+            "stdin": subprocess.DEVNULL,
+        }
+        if sys.platform == "win32":
+            flags = 0
+            if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+            if hasattr(subprocess, "DETACHED_PROCESS"):
+                flags |= subprocess.DETACHED_PROCESS
+            popen_kwargs["creationflags"] = flags
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        proc = subprocess.Popen(cmd, **popen_kwargs)
 
         now = time.time()
         record_id = f"ka_{nb_id}"
@@ -211,7 +204,8 @@ class KeepaliveManager:
                     # Verify termination; send SIGKILL if still active
                     try:
                         os.kill(pid, 0)
-                        os.kill(pid, signal.SIGKILL)
+                        sig_kill = getattr(signal, "SIGKILL", signal.SIGTERM)
+                        os.kill(pid, sig_kill)
                     except OSError:
                         pass
                 except OSError:

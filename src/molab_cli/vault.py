@@ -63,10 +63,15 @@ count = 0
 total_uncompressed = 0
 with tarfile.open(fileobj=buf, mode="w:gz") as tar:
     for root, dirs, files in os.walk(source_dir):
-        # Exclude common large caches
-        dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git", ".cache")]
+        # Exclude large development caches, virtual environments, node_modules, and binary models
+        ignore_dirs = {
+            "__pycache__", ".git", ".cache", ".venv", "venv", "env",
+            "node_modules", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+            ".tox", ".ipynb_checkpoints", ".cursor", ".vscode"
+        }
+        dirs[:] = [d for d in dirs if d not in ignore_dirs]
         for file in files:
-            if file.endswith((".pyc", ".tar.gz", ".tmp")):
+            if file.endswith((".pyc", ".tar.gz", ".tmp", ".log", ".swp", ".bak", ".safetensors", ".pt", ".bin", ".ckpt")):
                 continue
             full_path = os.path.join(root, file)
             rel_path = os.path.relpath(full_path, source_dir)

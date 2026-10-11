@@ -8,8 +8,9 @@ from molab_cli.capabilities import check_local_disk_space, check_tool_available,
 
 
 def test_check_tool_available():
-    # Python executable or sh should always be available
-    assert check_tool_available("sh") is True
+    import sys
+    tool = "cmd" if sys.platform == "win32" else "sh"
+    assert check_tool_available(tool) is True
     assert check_tool_available("nonexistent_tool_xyz_123") is False
 
 

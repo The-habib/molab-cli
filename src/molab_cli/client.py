@@ -7,10 +7,16 @@ import json
 import re
 import urllib.error
 import urllib.request
+import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from molab_cli.auth import get_cookie_header
-from molab_cli.config import DEFAULT_USER_AGENT
+from molab_cli.config import DEFAULT_USER_AGENT, get_config_dir
+from molab_cli.logger import get_logger
+from molab_cli.retry import is_transient_network_error, retry_with_backoff
+
+logger = get_logger("client")
 
 MOLAB_BASE = "https://molab.marimo.io"
 
@@ -30,6 +36,32 @@ class MoLabClient:
 
     def __init__(self):
         self._action_cache: Dict[str, str] = {}
+        self._load_action_cache()
+
+    def _load_action_cache(self) -> None:
+        """Load cached Server Action IDs from disk if within 24h TTL."""
+        cache_file = get_config_dir() / "action_cache.json"
+        if cache_file.exists():
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if time.time() - data.get("_saved_at", 0) < 86400:
+                    for k, v in data.items():
+                        if not k.startswith("_"):
+                            self._action_cache[k] = v
+            except Exception as e:
+                logger.debug("Failed loading action cache: %s", e)
+
+    def _save_action_cache(self) -> None:
+        """Persist discovered Server Action IDs to disk."""
+        try:
+            cache_file = get_config_dir() / "action_cache.json"
+            to_save = dict(self._action_cache)
+            to_save["_saved_at"] = time.time()
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(to_save, f, indent=2)
+        except Exception as e:
+            logger.debug("Failed saving action cache: %s", e)
 
     def fetch_url(
         self,
@@ -49,16 +81,35 @@ class MoLabClient:
             req_headers.update(headers)
 
         req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                status = resp.status
-                resp_headers = dict(resp.headers)
-                raw = resp.read()
-                if resp_headers.get("Content-Encoding") == "gzip":
+
+        def _do_request():
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    status = resp.status
+                    resp_headers = dict(resp.headers)
+                    raw = resp.read()
+                    if resp_headers.get("Content-Encoding") == "gzip":
+                        body = gzip.decompress(raw).decode("utf-8", errors="ignore")
+                    else:
+                        body = raw.decode("utf-8", errors="ignore")
+                    return status, body, resp_headers
+            except urllib.error.HTTPError as e:
+                if is_transient_network_error(e):
+                    raise
+                raw = e.read()
+                if e.headers.get("Content-Encoding") == "gzip":
                     body = gzip.decompress(raw).decode("utf-8", errors="ignore")
                 else:
                     body = raw.decode("utf-8", errors="ignore")
-                return status, body, resp_headers
+                return e.code, body, dict(e.headers)
+
+        try:
+            return retry_with_backoff(
+                max_attempts=3,
+                base_delay=0.3,
+                max_delay=3.0,
+                retry_if=is_transient_network_error,
+            )(_do_request)()
         except urllib.error.HTTPError as e:
             raw = e.read()
             if e.headers.get("Content-Encoding") == "gzip":
@@ -66,6 +117,9 @@ class MoLabClient:
             else:
                 body = raw.decode("utf-8", errors="ignore")
             return e.code, body, dict(e.headers)
+        except urllib.error.URLError as e:
+            logger.debug("Transient request to %s failed after retries: %s", url, e)
+            return 503, str(e), {}
 
     def resolve_action_id(self, action_name: str) -> str:
         """
@@ -91,11 +145,13 @@ class MoLabClient:
                         )
                         if m:
                             self._action_cache[action_name] = m[0]
+                            self._save_action_cache()
                             return m[0]
-                except Exception:
+                except Exception as ex:
+                    logger.debug("Failed scanning chunk %s: %s", chunk_path, ex)
                     continue
-        except Exception:
-            pass
+        except Exception as ex:
+            logger.debug("Failed fetching /new chunks: %s", ex)
 
         return FALLBACK_ACTIONS.get(action_name, "")
 

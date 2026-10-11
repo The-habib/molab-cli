@@ -12,19 +12,27 @@ import select
 import socketserver
 import subprocess
 import sys
-import termios
+try:
+    import termios
+    import tty
+except ImportError:
+    termios = None
+    tty = None
 import time
-import tty
 import urllib.request
 import uuid
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 import websockets
 
 from molab_cli.client import MoLabClient
 from molab_cli.config import get_active_notebook_id, set_active_notebook_id
 from molab_cli.exceptions import MissingPodError, SandboxOfflineError
+from molab_cli.logger import get_logger
+
+logger = get_logger("sandbox")
 
 
 def resolve_target_notebook(
@@ -54,7 +62,8 @@ def resolve_target_notebook(
     # Query running sandboxes
     try:
         running = c.list_running_sandboxes()
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed querying running sandboxes: %s", e)
         running = {}
 
     if saved_id and require_running and saved_id in running:
@@ -76,8 +85,8 @@ def resolve_target_notebook(
                     sel_id = picked["id"]
                     set_active_notebook_id(sel_id)
                     return sel_id
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("TUI pod picker failed: %s", e)
         running_list = ", ".join(running.keys())
         raise MissingPodError(
             message=f"Multiple pods are currently running: {running_list}.",
@@ -96,8 +105,8 @@ def resolve_target_notebook(
                     picked = pick_notebook(c, "Select notebook:")
                     if picked and picked.get("id"):
                         return picked["id"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed listing notebooks for fallback resolution: %s", e)
 
     raise SandboxOfflineError(
         notebook_id=saved_id or "unknown",
@@ -109,13 +118,100 @@ def resolve_target_notebook(
 class SandboxSession:
     """Manages connection to an ephemeral CoreWeave sandbox pod."""
 
-    def __init__(self, notebook_id: str, client: Optional[MoLabClient] = None):
+    def __init__(
+        self,
+        notebook_id: str,
+        client: Optional[MoLabClient] = None,
+        direct_endpoint: Optional[str] = None,
+    ):
         self.notebook_id = notebook_id if notebook_id.startswith("nb_") else f"nb_{notebook_id}"
         self.client = client or MoLabClient()
+        self.direct_endpoint = direct_endpoint
         self.sandbox_id: Optional[str] = None
         self.auth_token: Optional[str] = None
         self.expires_at: Optional[int] = None
         self._resolved = False
+
+    def get_direct_http_endpoint(self) -> Optional[str]:
+        """
+        Check for a direct HTTP endpoint to the model server.
+        Prioritizes:
+        1. Explicit direct_endpoint on session instance
+        2. MOLAB_API_BASE / OPENAI_BASE_URL environment variable
+        3. Active Cloudflare Public Tunnel via PublicTunnelManager
+        """
+        if getattr(self, "direct_endpoint", None):
+            return self.direct_endpoint
+
+        env_base = os.getenv("MOLAB_API_BASE") or os.getenv("OPENAI_BASE_URL")
+        if env_base:
+            return env_base.rstrip("/")
+
+        try:
+            from molab_cli.tunnel import PublicTunnelManager
+            active = PublicTunnelManager().get_active_tunnel()
+            if active and active.get("public_url"):
+                return active.get("openai_base_url") or active.get("public_url")
+        except Exception as e:
+            logger.debug("Failed checking active tunnel for direct HTTP: %s", e)
+
+        return None
+
+    async def _async_stream_via_http(
+        self,
+        endpoint_url: str,
+        payload: Dict[str, Any],
+    ):
+        """Direct native HTTP SSE stream from endpoint - zero bash, zero PTY scraping."""
+        auth_key = os.getenv("MOLAB_API_KEY", "sk-molab-blackwell-cluster")
+        target = endpoint_url.rstrip("/")
+        if not target.endswith("/chat/completions"):
+            target = f"{target}/chat/completions" if target.endswith("/v1") else f"{target}/v1/chat/completions"
+
+        headers = {
+            "Authorization": f"Bearer {auth_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+            async with client.stream("POST", target, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("data: "):
+                        chunk_str = line[6:].strip()
+                        if chunk_str == "[DONE]":
+                            return
+                        try:
+                            data = json.loads(chunk_str)
+                            choices = data.get("choices", [])
+                            if choices:
+                                delta = choices[0].get("delta", {})
+                                content = delta.get("content", "")
+                                reasoning = delta.get("reasoning_content", "")
+                                finish_reason = choices[0].get("finish_reason")
+                                tool_calls = delta.get("tool_calls")
+                                if content or reasoning or finish_reason or tool_calls:
+                                    yield {
+                                        "content": content,
+                                        "reasoning_content": reasoning,
+                                        "finish_reason": finish_reason,
+                                        "tool_calls": tool_calls,
+                                        "raw": data,
+                                    }
+                        except Exception:
+                            pass
+                    elif line.startswith("{") and '"error"' in line:
+                        try:
+                            err_data = json.loads(line)
+                            if "error" in err_data:
+                                msg = err_data["error"].get("message", line)
+                                raise RuntimeError(f"Model server error: {msg}")
+                        except json.JSONDecodeError:
+                            pass
+
 
     def resolve(self, force_refresh: bool = False) -> None:
         """Resolve sandbox host and token from live notebook page."""
@@ -136,14 +232,14 @@ class SandboxSession:
             padded = session_b64 + "=" * ((4 - len(session_b64) % 4) % 4)
             raw_text = base64.urlsafe_b64decode(padded).decode("utf-8", errors="ignore")
             token_obj, _ = json.JSONDecoder().raw_decode(raw_text)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Base64 token decode fallback triggered: %s", e)
 
         if not token_obj or not token_obj.get("auth_token"):
             try:
                 token_obj, _ = json.JSONDecoder().raw_decode(session_b64)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Raw JSON token decode fallback triggered: %s", e)
 
         if not token_obj or not token_obj.get("auth_token"):
             sb_m = re.search(r'"sandbox_id":"([^"]+)"', session_b64)
@@ -294,10 +390,11 @@ class SandboxSession:
     async def _async_interactive_shell(self) -> None:
         uri = self.ws_terminal_url
         async with websockets.connect(uri) as ws:
-            fd = sys.stdin.fileno()
-            old_settings = termios.tcgetattr(fd)
+            fd = sys.stdin.fileno() if sys.stdin.isatty() and termios is not None else None
+            old_settings = termios.tcgetattr(fd) if fd is not None and termios is not None else None
             try:
-                tty.setraw(fd)
+                if fd is not None and tty is not None:
+                    tty.setraw(fd)
 
                 async def ws_to_stdout():
                     try:
@@ -318,8 +415,11 @@ class SandboxSession:
                     loop = asyncio.get_event_loop()
                     try:
                         while True:
-                            # Read byte from stdin asynchronously
-                            char = await loop.run_in_executor(None, os.read, fd, 1024)
+                            if fd is not None:
+                                char = await loop.run_in_executor(None, os.read, fd, 1024)
+                            else:
+                                line = await loop.run_in_executor(None, sys.stdin.readline)
+                                char = line.encode("utf-8")
                             if not char:
                                 break
                             await ws.send(char.decode("utf-8", errors="ignore"))
@@ -338,7 +438,8 @@ class SandboxSession:
                 for task in pending:
                     task.cancel()
             finally:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                if fd is not None and termios is not None and old_settings is not None:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                 print("\n[Disconnected from MoLab Cloud Pod]")
 
     def push_file(self, local_path: str, remote_path: Optional[str] = None, recursive: bool = False) -> Tuple[str, int]:
@@ -357,7 +458,7 @@ class SandboxSession:
             dest_dir = remote_path or f"/workspace/{filename}"
             self.execute_command(f"mkdir -p {dest_dir}")
 
-            scratch_dir = "/data/data/com.termux/files/home/.gemini/antigravity-cli/brain"
+            scratch_dir = os.path.join(tempfile.gettempdir(), "molab_transfers")
             os.makedirs(scratch_dir, exist_ok=True)
             tar_name = f"_up_{uuid.uuid4().hex[:8]}.tar.gz"
             temp_tar = os.path.join(scratch_dir, tar_name)
@@ -368,19 +469,27 @@ class SandboxSession:
                 )
                 tar_size = os.path.getsize(temp_tar)
 
-                # Upload tarball to pod /tmp
+                # Upload tarball to pod /tmp via native HTTP
                 upload_url = f"{self.base_url}/api/files/create?token={self.auth_token}"
-                curl_cmd = [
-                    "curl", "-s", "-f", "-X", "POST",
-                    upload_url,
-                    "-F", "path=/tmp",
-                    "-F", "type=file",
-                    "-F", f"name={tar_name}",
-                    "-F", f"file=@{temp_tar}"
-                ]
-                res = subprocess.run(curl_cmd, capture_output=True, text=True)
-                if res.returncode != 0:
-                    raise RuntimeError(f"HTTP upload of directory tarball failed: {res.stderr}")
+                try:
+                    with open(temp_tar, "rb") as tf:
+                        files = {"file": (tar_name, tf, "application/gzip")}
+                        data = {"path": "/tmp", "type": "file", "name": tar_name}
+                        with httpx.Client(timeout=120.0) as client:
+                            resp = client.post(upload_url, data=data, files=files)
+                            resp.raise_for_status()
+                except Exception as e:
+                    curl_cmd = [
+                        "curl", "-s", "-f", "-X", "POST",
+                        upload_url,
+                        "-F", "path=/tmp",
+                        "-F", "type=file",
+                        "-F", f"name={tar_name}",
+                        "-F", f"file=@{temp_tar}"
+                    ]
+                    res = subprocess.run(curl_cmd, capture_output=True, text=True)
+                    if res.returncode != 0:
+                        raise RuntimeError(f"HTTP upload of directory tarball failed: {res.stderr}") from e
 
                 # Extract on pod and cleanup remote tarball
                 self.execute_command(f"tar -xzf /tmp/{tar_name} -C $(dirname {dest_dir}) && rm -f /tmp/{tar_name}")
@@ -407,17 +516,25 @@ class SandboxSession:
 
         # Stream directly via native Marimo HTTP multipart file upload API
         upload_url = f"{self.base_url}/api/files/create?token={self.auth_token}"
-        curl_cmd = [
-            "curl", "-s", "-f", "-X", "POST",
-            upload_url,
-            "-F", f"path={dest_dir}",
-            "-F", "type=file",
-            "-F", f"name={dest_name}",
-            "-F", f"file=@{p}"
-        ]
-        res = subprocess.run(curl_cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            raise RuntimeError(f"HTTP upload failed (code {res.returncode}): {res.stderr}")
+        try:
+            with open(p, "rb") as f:
+                files = {"file": (dest_name, f, "application/octet-stream")}
+                data = {"path": dest_dir, "type": "file", "name": dest_name}
+                with httpx.Client(timeout=120.0) as client:
+                    resp = client.post(upload_url, data=data, files=files)
+                    resp.raise_for_status()
+        except Exception as e:
+            curl_cmd = [
+                "curl", "-s", "-f", "-X", "POST",
+                upload_url,
+                "-F", f"path={dest_dir}",
+                "-F", "type=file",
+                "-F", f"name={dest_name}",
+                "-F", f"file=@{p}"
+            ]
+            res = subprocess.run(curl_cmd, capture_output=True, text=True)
+            if res.returncode != 0:
+                raise RuntimeError(f"HTTP upload failed (code {res.returncode}): {res.stderr}") from e
 
         return dest, file_size
 
@@ -432,7 +549,7 @@ class SandboxSession:
         # Check if remote path is a directory
         is_remote_dir = recursive or self.execute_command(f"[ -d {remote_path} ] && echo 1 || echo 0").strip() == "1"
         if is_remote_dir:
-            scratch_dir = "/data/data/com.termux/files/home/.gemini/antigravity-cli/brain"
+            scratch_dir = os.path.join(tempfile.gettempdir(), "molab_transfers")
             os.makedirs(scratch_dir, exist_ok=True)
             tar_name = f"_dl_{uuid.uuid4().hex[:8]}.tar.gz"
             parent_dir = self.execute_command(f"dirname {remote_path}").strip()
@@ -442,7 +559,15 @@ class SandboxSession:
             temp_local_tar = os.path.join(scratch_dir, tar_name)
             try:
                 download_url = f"{self.base_url}/api/files/download?path=/tmp/{tar_name}&token={self.auth_token}"
-                subprocess.run(["curl", "-s", "-f", "-L", "-o", temp_local_tar, download_url], check=True)
+                try:
+                    with httpx.Client(timeout=120.0) as client:
+                        with client.stream("GET", download_url) as resp:
+                            resp.raise_for_status()
+                            with open(temp_local_tar, "wb") as f:
+                                for chunk in resp.iter_bytes(chunk_size=65536):
+                                    f.write(chunk)
+                except Exception:
+                    subprocess.run(["curl", "-s", "-f", "-L", "-o", temp_local_tar, download_url], check=True)
 
                 os.makedirs(dest_p, exist_ok=True)
                 extract_target = os.path.dirname(dest_p) if not os.path.isdir(dest_p) else dest_p
@@ -460,14 +585,22 @@ class SandboxSession:
         os.makedirs(os.path.dirname(dest_p), exist_ok=True)
 
         download_url = f"{self.base_url}/api/files/download?path={remote_path}&token={self.auth_token}"
-        curl_cmd = [
-            "curl", "-s", "-f", "-L",
-            "-o", dest_p,
-            download_url
-        ]
-        res = subprocess.run(curl_cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            raise RuntimeError(f"HTTP download failed (code {res.returncode}): {res.stderr}")
+        try:
+            with httpx.Client(timeout=120.0) as client:
+                with client.stream("GET", download_url) as resp:
+                    resp.raise_for_status()
+                    with open(dest_p, "wb") as f:
+                        for chunk in resp.iter_bytes(chunk_size=65536):
+                            f.write(chunk)
+        except Exception as e:
+            curl_cmd = [
+                "curl", "-s", "-f", "-L",
+                "-o", dest_p,
+                download_url
+            ]
+            res = subprocess.run(curl_cmd, capture_output=True, text=True)
+            if res.returncode != 0:
+                raise RuntimeError(f"HTTP download failed (code {res.returncode}): {res.stderr}") from e
 
         return dest_p, os.path.getsize(dest_p)
 
@@ -550,8 +683,8 @@ class SandboxSession:
             raw_json = out[idx + len("___TELEMETRY___"):].strip().split("\n")[0]
             try:
                 return json.loads(raw_json)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed parsing telemetry JSON payload: %s", e)
         return {"cuda_available": False, "raw_output": out}
 
     def install_packages(self, packages: List[str]) -> str:
@@ -571,30 +704,64 @@ class SandboxSession:
 
     def get_active_model(self) -> Optional[str]:
         """Fetch the currently active model ID from the pod's vLLM / OpenAI server."""
-        raw = self.execute_command("curl -s http://127.0.0.1:8000/v1/models", timeout=6.0)
+        endpoint = self.get_direct_http_endpoint()
+        if endpoint:
+            target = endpoint.rstrip("/")
+            if not target.endswith("/models"):
+                target = f"{target}/models" if target.endswith("/v1") else f"{target}/v1/models"
+            try:
+                auth_key = os.getenv("MOLAB_API_KEY", "sk-molab-blackwell-cluster")
+                with httpx.Client(timeout=5.0) as client:
+                    resp = client.get(target, headers={"Authorization": f"Bearer {auth_key}"})
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        models = data.get("data", [])
+                        if models and "id" in models[0]:
+                            return models[0]["id"]
+            except Exception as e:
+                logger.debug("Failed fetching active model ID via direct HTTP (%s): %s", target, e)
+
         try:
+            raw = self.execute_command("curl -s http://127.0.0.1:8000/v1/models", timeout=6.0)
             idx = raw.find("{")
             if idx != -1:
                 data = json.loads(raw[idx:])
                 models = data.get("data", [])
                 if models and "id" in models[0]:
                     return models[0]["id"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed fetching active model ID via shell: %s", e)
         return None
 
     async def async_get_active_model(self) -> Optional[str]:
         """Async fetch the currently active model ID from the pod's vLLM / OpenAI server."""
-        raw = await self._async_execute("curl -s http://127.0.0.1:8000/v1/models", timeout=6.0)
+        endpoint = self.get_direct_http_endpoint()
+        if endpoint:
+            target = endpoint.rstrip("/")
+            if not target.endswith("/models"):
+                target = f"{target}/models" if target.endswith("/v1") else f"{target}/v1/models"
+            try:
+                auth_key = os.getenv("MOLAB_API_KEY", "sk-molab-blackwell-cluster")
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.get(target, headers={"Authorization": f"Bearer {auth_key}"})
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        models = data.get("data", [])
+                        if models and "id" in models[0]:
+                            return models[0]["id"]
+            except Exception as e:
+                logger.debug("Failed async fetching active model ID via direct HTTP (%s): %s", target, e)
+
         try:
+            raw = await self._async_execute("curl -s http://127.0.0.1:8000/v1/models", timeout=6.0)
             idx = raw.find("{")
             if idx != -1:
                 data = json.loads(raw[idx:])
                 models = data.get("data", [])
                 if models and "id" in models[0]:
                     return models[0]["id"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed async fetching active model ID via shell: %s", e)
         return None
 
 
@@ -607,15 +774,15 @@ class SandboxSession:
             free_info = c.get_free_pod()
             if free_info and free_info.get("recommended_free_pod"):
                 return free_info["recommended_free_pod"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("discover_active_pod get_free_pod failed: %s", e)
 
         try:
             running = c.list_running_sandboxes()
             if running:
                 return running[0].get("notebook_id")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("discover_active_pod list_running_sandboxes failed: %s", e)
 
         try:
             nbs = c.list_notebooks()
@@ -624,8 +791,8 @@ class SandboxSession:
                     return nb.get("id")
             if nbs:
                 return nbs[0].get("id")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("discover_active_pod list_notebooks failed: %s", e)
         return None
 
     def chat_completion(
@@ -637,7 +804,7 @@ class SandboxSession:
     ) -> Dict[str, Any]:
         """
         Query the OpenAI-compatible model server running inside the cloud pod.
-        Auto-detects active model if not specified.
+        Auto-detects active model if not specified. Uses direct HTTP endpoint if available.
         """
         if not model:
             model = self.get_active_model() or "default"
@@ -649,6 +816,24 @@ class SandboxSession:
             "temperature": temperature,
             "stream": False,
         }
+
+        # 1. Direct HTTP Tunnel / Native Reverse Proxy Check
+        endpoint = self.get_direct_http_endpoint()
+        if endpoint:
+            auth_key = os.getenv("MOLAB_API_KEY", "sk-molab-blackwell-cluster")
+            target = endpoint.rstrip("/")
+            if not target.endswith("/chat/completions"):
+                target = f"{target}/chat/completions" if target.endswith("/v1") else f"{target}/v1/chat/completions"
+            headers = {"Authorization": f"Bearer {auth_key}", "Content-Type": "application/json"}
+            try:
+                with httpx.Client(timeout=120.0) as client:
+                    resp = client.post(target, json=payload, headers=headers)
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as e:
+                logger.debug("Direct HTTP chat completion failed (%s): %s", target, e)
+
+        # 2. Fallback to shell invocation
         b64_body = base64.b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8")
         cmd = f"echo '{b64_body}' | base64 -d | curl -s -X POST http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' --data-binary @-"
         raw = self.execute_command(cmd, timeout=120.0)
@@ -659,30 +844,29 @@ class SandboxSession:
             except Exception:
                 pass
         return {"choices": [{"message": {"content": raw}}]}
-    async def _upload_temp_json_payload(self, json_bytes: bytes) -> str:
-        """Upload a JSON request payload to pod /tmp using native Marimo multipart upload."""
+
+    def _upload_temp_json_payload_sync(self, json_bytes: bytes) -> str:
+        """Synchronously upload a JSON request payload to pod /tmp using in-memory multipart upload."""
+        self.resolve()
         req_name = f"_req_{uuid.uuid4().hex[:8]}.json"
         upload_url = f"{self.base_url}/api/files/create?token={self.auth_token}"
-        with tempfile.NamedTemporaryFile(delete=False) as tf:
-            tf.write(json_bytes)
-            tf_path = tf.name
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "curl", "-s", "-f", "-X", "POST", upload_url,
-                "-F", "path=/tmp",
-                "-F", "type=file",
-                "-F", f"name={req_name}",
-                "-F", f"file=@{tf_path}",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.wait()
-        finally:
-            if os.path.exists(tf_path):
-                try:
-                    os.unlink(tf_path)
-                except OSError:
-                    pass
+        files = {"file": (req_name, json_bytes, "application/json")}
+        data = {"path": "/tmp", "type": "file", "name": req_name}
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(upload_url, data=data, files=files)
+            resp.raise_for_status()
+        return req_name
+
+    async def _upload_temp_json_payload(self, json_bytes: bytes) -> str:
+        """Upload a JSON request payload to pod /tmp using native Marimo multipart upload in memory."""
+        self.resolve()
+        req_name = f"_req_{uuid.uuid4().hex[:8]}.json"
+        upload_url = f"{self.base_url}/api/files/create?token={self.auth_token}"
+        files = {"file": (req_name, json_bytes, "application/json")}
+        data = {"path": "/tmp", "type": "file", "name": req_name}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(upload_url, data=data, files=files)
+            resp.raise_for_status()
         return req_name
 
     async def async_chat_completion(
@@ -709,6 +893,23 @@ class SandboxSession:
                 if k not in payload:
                     payload[k] = v
 
+        # 1. Direct HTTP Tunnel / Native Reverse Proxy Check
+        endpoint = self.get_direct_http_endpoint()
+        if endpoint:
+            auth_key = os.getenv("MOLAB_API_KEY", "sk-molab-blackwell-cluster")
+            target = endpoint.rstrip("/")
+            if not target.endswith("/chat/completions"):
+                target = f"{target}/chat/completions" if target.endswith("/v1") else f"{target}/v1/chat/completions"
+            headers = {"Authorization": f"Bearer {auth_key}", "Content-Type": "application/json"}
+            try:
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    resp = await client.post(target, json=payload, headers=headers)
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as e:
+                logger.debug("Direct HTTP async chat completion failed (%s): %s", target, e)
+
+        # 2. In-Memory Upload Fallback via pod shell
         self.resolve()
         json_bytes = json.dumps(payload).encode("utf-8")
         if len(json_bytes) > 1500:
@@ -751,6 +952,17 @@ class SandboxSession:
                 if k not in payload:
                     payload[k] = v
 
+        # 1. Direct HTTP Tunnel / Native Reverse Proxy Check (Zero Bash, Zero PTY scraping)
+        endpoint = self.get_direct_http_endpoint()
+        if endpoint:
+            try:
+                async for chunk in self._async_stream_via_http(endpoint, payload):
+                    yield chunk
+                return
+            except Exception as e:
+                logger.debug("Direct HTTP stream failed (%s), falling back to pod terminal: %s", endpoint, e)
+
+        # 2. In-Memory Upload Fallback via pod WebSocket
         self.resolve()
         json_bytes = json.dumps(payload).encode("utf-8")
         if len(json_bytes) > 1500:
@@ -769,6 +981,15 @@ class SandboxSession:
             try:
                 while True:
                     await asyncio.wait_for(ws.recv(), timeout=0.2)
+            except asyncio.TimeoutError:
+                pass
+
+            # Suppress terminal echo to avoid command reflection & ANSI pollution
+            await ws.send("stty raw -echo 2>/dev/null || true\n")
+            await asyncio.sleep(0.1)
+            try:
+                while True:
+                    await asyncio.wait_for(ws.recv(), timeout=0.1)
             except asyncio.TimeoutError:
                 pass
 
@@ -873,10 +1094,18 @@ class SandboxSession:
         if self.get_active_model():
             return True
 
+        # Check if a model launch script exists before attempting launch
+        check_script = self.execute_command(
+            "test -f /workspace/run_qwen.py && echo 'EXISTS' || (test -f /workspace/start.sh && echo 'EXISTS' || echo 'MISSING')",
+            timeout=4.0,
+        ).strip()
+        if "EXISTS" not in check_script:
+            return False
+
         self.execute_command(
-            "nohup python3 /workspace/run_qwen.py > /workspace/qwen_server.log 2>&1 & "
-            "|| bash /workspace/start.sh 2>/dev/null || bash /marimo/start_server.sh 2>/dev/null",
-            timeout=15.0,
+            "if [ -f /workspace/run_qwen.py ]; then nohup python3 /workspace/run_qwen.py > /workspace/qwen_server.log 2>&1 & "
+            "elif [ -f /workspace/start.sh ]; then nohup bash /workspace/start.sh > /workspace/start.log 2>&1 & fi",
+            timeout=10.0,
         )
         deadline = time.time() + 45
         while time.time() < deadline:
@@ -894,6 +1123,7 @@ class LocalHttpForwarder:
     """
     Lightweight local HTTP proxy that forwards localhost calls directly to the
     remote model server running inside the CoreWeave container pod.
+    Supports direct HTTP streaming, real-time SSE token delivery, and in-memory uploads.
     """
 
     def __init__(self, session: SandboxSession, port: int = 8000):
@@ -918,6 +1148,18 @@ class LocalHttpForwarder:
                 self.end_headers()
 
             def do_GET(self):
+                endpoint = session.get_direct_http_endpoint()
+                if endpoint:
+                    try:
+                        target = f"{endpoint.rstrip('/')}{self.path}"
+                        headers = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "content-length")}
+                        with httpx.Client(timeout=30.0) as client:
+                            resp = client.get(target, headers=headers)
+                            self._send_response(resp.text, status_code=resp.status_code)
+                            return
+                    except Exception as e:
+                        logger.debug("Direct HTTP GET forward failed, falling back to shell: %s", e)
+
                 auth = self.headers.get("Authorization", "")
                 auth_hdr = f"-H 'Authorization: {auth}' " if auth else ""
                 cmd = f"curl -s -X GET {auth_hdr}http://127.0.0.1:8000{self.path}"
@@ -930,15 +1172,54 @@ class LocalHttpForwarder:
                 auth = self.headers.get("Authorization", "")
                 auth_hdr = f"-H 'Authorization: {auth}' " if auth else ""
 
+                endpoint = session.get_direct_http_endpoint()
+                if endpoint:
+                    try:
+                        target = f"{endpoint.rstrip('/')}{self.path}"
+                        headers = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "content-length")}
+                        # Check if caller requested streaming
+                        is_stream = False
+                        try:
+                            parsed_body = json.loads(body.decode("utf-8"))
+                            is_stream = bool(parsed_body.get("stream", False))
+                        except Exception:
+                            pass
+
+                        if is_stream:
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/event-stream")
+                            self.send_header("Cache-Control", "no-cache")
+                            self.send_header("Connection", "keep-alive")
+                            origin = self.headers.get("Origin") or "*"
+                            self.send_header("Access-Control-Allow-Origin", origin)
+                            self.end_headers()
+
+                            with httpx.Client(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+                                with client.stream("POST", target, content=body, headers=headers) as resp:
+                                    for chunk in resp.iter_bytes():
+                                        self.wfile.write(chunk)
+                                        self.wfile.flush()
+                            return
+                        else:
+                            with httpx.Client(timeout=120.0) as client:
+                                resp = client.post(target, content=body, headers=headers)
+                                self._send_response(resp.text, status_code=resp.status_code)
+                                return
+                    except Exception as e:
+                        logger.debug("Direct HTTP POST forward failed, falling back to pod upload: %s", e)
+
                 if len(body) > 3000:
-                    req_name = f"_req_{uuid.uuid4().hex[:8]}.json"
-                    upload_url = f"{session.base_url}/api/files/create?token={session.auth_token}"
-                    subprocess.run(
-                        ["curl", "-s", "-f", "-X", "POST", upload_url,
-                         "-F", "path=/tmp", "-F", "type=file", "-F", f"name={req_name}",
-                         "-F", "file=@-"],
-                        input=body, check=True
-                    )
+                    try:
+                        req_name = session._upload_temp_json_payload_sync(body)
+                    except Exception:
+                        req_name = f"_req_{uuid.uuid4().hex[:8]}.json"
+                        upload_url = f"{session.base_url}/api/files/create?token={session.auth_token}"
+                        subprocess.run(
+                            ["curl", "-s", "-f", "-X", "POST", upload_url,
+                             "-F", "path=/tmp", "-F", "type=file", "-F", f"name={req_name}",
+                             "-F", "file=@-"],
+                            input=body, check=True
+                        )
                     cmd = f"curl -s -X POST http://127.0.0.1:8000{self.path} {auth_hdr}-H 'Content-Type: application/json' --data-binary @/tmp/{req_name} ; rm -f /tmp/{req_name}"
                     raw = session.execute_command(cmd, timeout=180.0)
                 else:

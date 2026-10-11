@@ -308,28 +308,31 @@ def convert_claude_to_openai(claude_req: Dict[str, Any], target_model: str) -> D
 
 
 def parse_tool_call(text: str) -> Optional[Dict[str, Any]]:
-    """Detect and parse tool call in assistant output."""
+    """Detect and parse tool call in assistant output with key-order independence and validation."""
     m = re.search(r"<tool_call>([\s\S]*?)</tool_call>", text)
     if m:
         try:
             d = json.loads(m.group(1).strip())
-            return {
-                "name": d.get("name"),
-                "arguments": d.get("arguments", {}),
-                "pre_text": text[:m.start()].strip()
-            }
+            if isinstance(d, dict) and d.get("name") and isinstance(d.get("name"), str):
+                return {
+                    "name": d["name"],
+                    "arguments": d.get("arguments", d.get("parameters", {})),
+                    "pre_text": text[:m.start()].strip()
+                }
         except Exception:
             pass
 
-    m = re.search(r"```(?:json)?\s*(\{\s*\"name\"[\s\S]*?\})\s*```", text)
-    if m:
+    for block_match in re.finditer(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text):
         try:
-            d = json.loads(m.group(1).strip())
-            return {
-                "name": d.get("name"),
-                "arguments": d.get("arguments", {}),
-                "pre_text": text[:m.start()].strip()
-            }
+            d = json.loads(block_match.group(1).strip())
+            if isinstance(d, dict) and d.get("name") and ("arguments" in d or "parameters" in d):
+                args = d.get("arguments", d.get("parameters", {}))
+                if isinstance(args, dict):
+                    return {
+                        "name": d["name"],
+                        "arguments": args,
+                        "pre_text": text[:block_match.start()].strip()
+                    }
         except Exception:
             pass
 
@@ -337,16 +340,26 @@ def parse_tool_call(text: str) -> Optional[Dict[str, Any]]:
     if stripped.startswith("{") and stripped.endswith("}"):
         try:
             d = json.loads(stripped)
-            if "name" in d and ("arguments" in d or "parameters" in d):
-                return {
-                    "name": d.get("name"),
-                    "arguments": d.get("arguments") or d.get("parameters", {}),
-                    "pre_text": ""
-                }
+            if isinstance(d, dict) and d.get("name") and ("arguments" in d or "parameters" in d):
+                args = d.get("arguments", d.get("parameters", {}))
+                if isinstance(args, dict):
+                    return {
+                        "name": d["name"],
+                        "arguments": args,
+                        "pre_text": ""
+                    }
         except Exception:
             pass
 
     return None
+
+
+def estimate_token_count(text: str) -> int:
+    """Accurately estimate subword token count for code and prose."""
+    if not text:
+        return 0
+    tokens = re.findall(r"\w+|[^\w\s]", text)
+    return max(1, len(tokens))
 
 
 @app.get("/health")
@@ -457,10 +470,10 @@ async def list_models():
 async def count_tokens(request: Request):
     try:
         data = await request.json()
-        total_chars = len(extract_system_prompt(data.get("system")))
-        for m in data.get("messages", []):
-            total_chars += len(extract_content_text(m.get("content")))
-        estimated = max(1, total_chars // 4)
+        sys_prompt = extract_system_prompt(data.get("system"))
+        msg_parts = [extract_content_text(m.get("content")) for m in data.get("messages", [])]
+        combined = sys_prompt + "\n" + "\n".join(msg_parts)
+        estimated = estimate_token_count(combined)
         return JSONResponse({"input_tokens": estimated})
     except Exception:
         return JSONResponse({"input_tokens": 100})
@@ -486,10 +499,9 @@ async def messages_endpoint(request: Request):
     messages = openai_payload["messages"]
 
     # Gateway Auth, Rate Limiting, and Metrics Auditing
-    total_chars = len(extract_system_prompt(body.get("system")))
-    for m in body.get("messages", []):
-        total_chars += len(extract_content_text(m.get("content")))
-    est_prompt_tokens = max(1, total_chars // 4)
+    sys_prompt = extract_system_prompt(body.get("system"))
+    msg_parts = [extract_content_text(m.get("content")) for m in body.get("messages", [])]
+    est_prompt_tokens = estimate_token_count(sys_prompt + "\n" + "\n".join(msg_parts))
 
     start_time = time.time()
     req_id = f"req_{uuid.uuid4().hex[:12]}"
@@ -514,7 +526,7 @@ async def messages_endpoint(request: Request):
             raw_text = f"Error querying Blackwell GPU model: {e}"
 
         duration_ms = (time.time() - start_time) * 1000.0
-        out_tokens = len(raw_text.split())
+        out_tokens = estimate_token_count(raw_text)
         try:
             default_gateway_db.record_usage(
                 key_id=key_record["key_id"],

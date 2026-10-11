@@ -4,6 +4,7 @@ Unit tests for Click CLI commands and help flags.
 
 from click.testing import CliRunner
 import pytest
+from molab_cli import __version__
 from molab_cli.cli import cli
 
 
@@ -12,7 +13,7 @@ def test_cli_version():
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
     assert "molab" in result.output
-    assert "2.4.0" in result.output
+    assert __version__ in result.output
 
 
 def test_cli_help():

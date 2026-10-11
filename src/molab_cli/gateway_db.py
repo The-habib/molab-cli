@@ -12,6 +12,8 @@ import sqlite3
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from molab_cli.db import db_session
+
 DB_DIR = os.path.expanduser("~/.config/molab")
 DB_PATH = os.path.join(DB_DIR, "gateway.db")
 
@@ -29,16 +31,13 @@ class GatewayDB:
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self.init_db()
 
-    def get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        return conn
+    def session(self, timeout: float = 10.0):
+        """Open a scoped database session that automatically commits and closes."""
+        return db_session(self.db_path, timeout=timeout, wal_mode=True)
 
     def init_db(self) -> None:
         """Create tables and default key if database is fresh."""
-        with self.get_connection() as conn:
+        with self.session() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS api_keys (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,7 +107,7 @@ class GatewayDB:
         prefix = raw_key[:14] + "..."
         hashed = hash_key(raw_key)
 
-        with self.get_connection() as conn:
+        with self.session() as conn:
             conn.execute("""
                 INSERT INTO api_keys (
                     key_id, name, key_prefix, hashed_key, rpm_limit, tpm_limit, is_active, created_at
@@ -132,7 +131,7 @@ class GatewayDB:
         if not raw_key:
             return None
         hashed = hash_key(raw_key.strip())
-        with self.get_connection() as conn:
+        with self.session() as conn:
             cur = conn.cursor()
             cur.execute("""
                 SELECT key_id, name, key_prefix, rpm_limit, tpm_limit, is_active,
@@ -159,7 +158,7 @@ class GatewayDB:
     ) -> None:
         """Atomically record request usage and increment key totals."""
         now = int(time.time())
-        with self.get_connection() as conn:
+        with self.session() as conn:
             conn.execute("""
                 INSERT INTO request_logs (
                     req_id, key_id, endpoint, model, prompt_tokens, completion_tokens,
@@ -203,7 +202,7 @@ class GatewayDB:
 
     def list_keys(self) -> List[Dict[str, Any]]:
         """List all registered API keys and usage statistics."""
-        with self.get_connection() as conn:
+        with self.session() as conn:
             cur = conn.cursor()
             cur.execute("""
                 SELECT key_id, name, key_prefix, rpm_limit, tpm_limit, is_active,
@@ -215,7 +214,7 @@ class GatewayDB:
 
     def revoke_key(self, key_id: str) -> bool:
         """Deactivate an API key immediately."""
-        with self.get_connection() as conn:
+        with self.session() as conn:
             cur = conn.cursor()
             cur.execute("UPDATE api_keys SET is_active = 0 WHERE key_id = ?", (key_id,))
             conn.commit()
@@ -223,7 +222,7 @@ class GatewayDB:
 
     def get_analytics(self) -> Dict[str, Any]:
         """Aggregate high-level system usage and latency metrics."""
-        with self.get_connection() as conn:
+        with self.session() as conn:
             cur = conn.cursor()
             cur.execute("""
                 SELECT

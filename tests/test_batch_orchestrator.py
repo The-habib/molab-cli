@@ -13,9 +13,9 @@ from molab_cli.scheduler import BatchOrchestrator
 
 
 @pytest.fixture
-def temp_db():
-    with tempfile.NamedTemporaryFile() as tmp:
-        yield tmp.name
+def temp_db(tmp_path):
+    db_file = tmp_path / "test_jobs.db"
+    return str(db_file)
 
 
 def test_batch_create_and_get(temp_db):

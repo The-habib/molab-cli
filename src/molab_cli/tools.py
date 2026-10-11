@@ -7,26 +7,36 @@ edit_file (search & replace), list_dir, grep_search, plus file backup tracking f
 
 import os
 import re
+import shutil
 import subprocess
+import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 
-class FileBackupManager:
-    """Tracks pre-modification file snapshots in-memory to enable instant /undo."""
+import zlib
 
-    def __init__(self, max_history: int = 50):
+
+class FileBackupManager:
+    """Tracks pre-modification file snapshots using compressed storage to prevent OOM leaks."""
+
+    def __init__(self, max_history: int = 50, max_file_size: int = 10 * 1024 * 1024):
         self.max_history = max_history
-        self._history: List[Tuple[str, Optional[str]]] = []  # (abs_path, previous_content or None if was new)
+        self.max_file_size = max_file_size
+        self._history: List[Tuple[str, Optional[bytes]]] = []  # (abs_path, compressed_content or None if was new)
 
     def record_before_write(self, path: str) -> None:
-        """Snapshot file contents before modifying it."""
+        """Snapshot compressed file contents before modifying it, skipping oversized files."""
         abs_p = os.path.abspath(path)
         if os.path.exists(abs_p):
             try:
-                with open(abs_p, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-                self._history.append((abs_p, content))
+                sz = os.path.getsize(abs_p)
+                if sz > self.max_file_size:
+                    return
+                with open(abs_p, "rb") as f:
+                    content_bytes = f.read()
+                compressed = zlib.compress(content_bytes, level=6)
+                self._history.append((abs_p, compressed))
             except Exception:
                 pass
         else:
@@ -40,19 +50,20 @@ class FileBackupManager:
         if not self._history:
             return False, "No file modifications to undo in this session."
 
-        abs_p, prev_content = self._history.pop()
+        abs_p, comp_content = self._history.pop()
         rel_p = os.path.relpath(abs_p, os.getcwd())
 
         try:
-            if prev_content is None:
+            if comp_content is None:
                 # File was newly created, delete it
                 if os.path.exists(abs_p):
                     os.remove(abs_p)
                 return True, f"Reverted creation: deleted newly created file '{rel_p}'."
             else:
-                # Restore previous contents
-                with open(abs_p, "w", encoding="utf-8") as f:
-                    f.write(prev_content)
+                # Restore previous contents from compressed bytes
+                decompressed = zlib.decompress(comp_content)
+                with open(abs_p, "wb") as f:
+                    f.write(decompressed)
                 return True, f"Reverted modifications in '{rel_p}' to previous state."
         except Exception as e:
             return False, f"Failed to undo changes for '{rel_p}': {e}"
@@ -72,8 +83,11 @@ def tool_run_shell(command: str, timeout: int = 45) -> str:
         return "Error: Empty command."
 
     try:
+        from molab_cli.compat import get_shell_command
+        cmd_args = get_shell_command(command)
+
         proc = subprocess.run(
-            ["bash", "-c", command],
+            cmd_args,
             capture_output=True,
             text=True,
             timeout=max(1, min(timeout, 300)),

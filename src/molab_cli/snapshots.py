@@ -47,12 +47,14 @@ class SnapshotManager:
 
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or get_default_db_path()
+        dir_name = os.path.dirname(self.db_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         self._init_db()
 
-    def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _get_conn(self):
+        from molab_cli.db import db_session
+        return db_session(self.db_path, timeout=15.0, wal_mode=True)
 
     def _init_db(self) -> None:
         with self._get_conn() as conn:

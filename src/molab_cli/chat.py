@@ -572,13 +572,22 @@ def ensure_claude_bridge(port: int = 8082, notebook_id: Optional[str] = None) ->
         env["MOLAB_POD_ID"] = notebook_id
 
     try:
-        subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        popen_kwargs: Dict[str, Any] = {
+            "env": env,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if sys.platform == "win32":
+            flags = 0
+            if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+                flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+            if hasattr(subprocess, "DETACHED_PROCESS"):
+                flags |= subprocess.DETACHED_PROCESS
+            popen_kwargs["creationflags"] = flags
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        subprocess.Popen(cmd, **popen_kwargs)
     except Exception as e:
         console.print(f"[red]Failed to spawn MoLab bridge daemon:[/red] {e}")
         return False

@@ -194,13 +194,19 @@ def get_cookie_header() -> str:
     session_id = get_session_id()
     org_id = get_org_id()
     cfg = load_config()
-    uat = str(cfg.get("client_uat", "1791104535"))
+    uat = str(cfg.get("client_uat", int(time.time())))
+    instance_id = str(cfg.get("instance_id") or "DtbpIAMT")
 
-    return (
-        f"__session={jwt}; __session_DtbpIAMT={jwt}; "
-        f"__client_uat={uat}; __client_uat_DtbpIAMT={uat}; "
-        f"clerk_active_context={session_id}:{org_id}"
-    )
+    cookies = [
+        f"__session={jwt}",
+        f"__client_uat={uat}",
+        f"clerk_active_context={session_id}:{org_id}",
+    ]
+    if instance_id:
+        cookies.append(f"__session_{instance_id}={jwt}")
+        cookies.append(f"__client_uat_{instance_id}={uat}")
+
+    return "; ".join(cookies)
 
 
 def save_and_verify_auth(raw_input: str) -> Dict[str, Any]:
