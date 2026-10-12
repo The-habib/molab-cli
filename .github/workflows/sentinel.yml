@@ -17,6 +17,10 @@ on:
           - start_pods
           - verify_openclaw
 
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   sentinel:
     name: MoLab Blackwell Keepalive & Auto-Resurrection
@@ -129,3 +133,52 @@ jobs:
 
           print("\n=== All pods successfully protected. 30m idle reaper defeated ===")
           EOF
+
+      - name: Fetch and Publish Live OpenClaw URL
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - << 'EOF'
+          import os, json, base64, urllib.request
+          from molab_cli.client import MoLabClient
+          from molab_cli.sandbox import SandboxSession
+
+          primary_nb_id = "nb_2vnuPkt49n9mPd3yLFRYv1"
+          client = MoLabClient()
+          session = SandboxSession(primary_nb_id, client=client)
+          session.resolve()
+
+          try:
+              url_out = session.execute_command("cat /workspace/LATEST_URL.txt 2>/dev/null || cat /workspace/TUNNEL_URL.txt 2>/dev/null", timeout=10.0)
+              url = url_out.strip()
+              if url and url.startswith("http"):
+                  if "#token=" not in url:
+                      url = f"{url}/#token=molab-claw-2026"
+                  print(f"Discovered Live URL: {url}")
+
+                  # 1. Write to GitHub Actions Job Summary
+                  summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+                  if summary_path:
+                      with open(summary_path, "a", encoding="utf-8") as sf:
+                          sf.write(f"\n## 🦞 Live OpenClaw Dashboard\n\n**Direct Link:** [{url}]({url})\n\n*(Pre-authenticated with access token)*\n\n---\n")
+
+                  # 2. Update LATEST_TUNNEL_URL.md locally
+                  doc_content = f"# 🦞 Live OpenClaw Control Dashboard\n\n**Direct Access Link (Pre-Authenticated):**\n\n### 👉 [{url}]({url})\n\n---\n- **Active Model**: `ollama/hermes3:8b` (128k context, unrestricted)\n- **Alternate Model**: `ollama/qwen2.5-coder:14b` (coding & reasoning)\n- **Keep-Alive Status**: 24/7 GitHub Actions Sentinel Active\n- **Local Port Forward Alternative**: `molab forward 18789` -> [http://localhost:18789/#token=molab-claw-2026](http://localhost:18789/#token=molab-claw-2026)\n\n*(This file is automatically updated by the Sentinel workflow whenever the pod restarts or updates its tunnel)*\n"
+                  with open("LATEST_TUNNEL_URL.md", "w", encoding="utf-8") as f:
+                      f.write(doc_content)
+
+          except Exception as e:
+              print(f"Error publishing tunnel URL: {e}")
+          EOF
+
+      - name: Commit Latest URL to Repository
+        run: |
+          git config --global user.name "MoLab Sentinel Bot"
+          git config --global user.email "bot@molab.ai"
+          git add LATEST_TUNNEL_URL.md || true
+          if ! git diff --cached --quiet; then
+            git commit -m "docs: auto-update live OpenClaw tunnel URL [skip ci]"
+            git push origin main || echo "Git push skipped"
+          else
+            echo "URL unchanged, no commit needed."
+          fi
