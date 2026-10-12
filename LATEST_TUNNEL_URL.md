@@ -2,11 +2,12 @@
 
 **Direct Access Link (Pre-Authenticated):**
 
-### 👉 [https://tzrqy-166-19-116-212.run.pinggy-free.link/#token=molab-claw-2026](https://tzrqy-166-19-116-212.run.pinggy-free.link/#token=molab-claw-2026)
+### 👉 [https://ecnue-166-19-116-201.free.pinggy.net/#token=molab-claw-2026](https://ecnue-166-19-116-201.free.pinggy.net/#token=molab-claw-2026)
 
 ---
-- **Active Model**: `ollama/hermes3:8b` (128k context, unrestricted)
-- **Alternate Model**: `ollama/qwen2.5-coder:14b` (coding & reasoning)
+- **Active Model**: `ollama/claw-32b` (Single 26GB Unrestricted Abliterated Qwen 2.5 32B, 131k context window, native CUDA on NVIDIA RTX PRO 6000 Blackwell 95GB VRAM)
+- **Autonomous Mode**: Full Tool Execution (Zero Permission Requests, Web Search, Browser, Bash, Python)
+- **Telegram Bot**: Live & Active (`@HelpGodsbot`, Zero Pairing Required for Owner ID: 1550319630)
 - **Keep-Alive Status**: 24/7 GitHub Actions Sentinel Active
 - **Local Port Forward Alternative**: `molab forward 18789` -> [http://localhost:18789/#token=molab-claw-2026](http://localhost:18789/#token=molab-claw-2026)
 

@@ -163,7 +163,18 @@ jobs:
                           sf.write(f"\n## 🦞 Live OpenClaw Dashboard\n\n**Direct Link:** [{url}]({url})\n\n*(Pre-authenticated with access token)*\n\n---\n")
 
                   # 2. Update LATEST_TUNNEL_URL.md locally
-                  doc_content = f"# 🦞 Live OpenClaw Control Dashboard\n\n**Direct Access Link (Pre-Authenticated):**\n\n### 👉 [{url}]({url})\n\n---\n- **Active Model**: `ollama/hermes3:8b` (128k context, unrestricted)\n- **Alternate Model**: `ollama/qwen2.5-coder:14b` (coding & reasoning)\n- **Keep-Alive Status**: 24/7 GitHub Actions Sentinel Active\n- **Local Port Forward Alternative**: `molab forward 18789` -> [http://localhost:18789/#token=molab-claw-2026](http://localhost:18789/#token=molab-claw-2026)\n\n*(This file is automatically updated by the Sentinel workflow whenever the pod restarts or updates its tunnel)*\n"
+                  doc_content = (
+                      f"# 🦞 Live OpenClaw Control Dashboard\n\n"
+                      f"**Direct Access Link (Pre-Authenticated):**\n\n"
+                      f"### 👉 [{url}]({url})\n\n"
+                      f"---\n"
+                      f"- **Active Model**: `ollama/claw-32b` (Single 26GB Unrestricted Abliterated Qwen 2.5 32B, 131k context window, native CUDA on NVIDIA RTX PRO 6000 Blackwell 95GB VRAM)\n"
+                      f"- **Autonomous Mode**: Full Tool Execution (Zero Permission Requests, Web Search, Browser, Bash, Python)\n"
+                      f"- **Telegram Bot**: Live & Active (@HelpGodsbot, Zero Pairing Required)\n"
+                      f"- **Keep-Alive Status**: 24/7 GitHub Actions Sentinel Active\n"
+                      f"- **Local Port Forward Alternative**: `molab forward 18789` -> [http://localhost:18789/#token=molab-claw-2026](http://localhost:18789/#token=molab-claw-2026)\n\n"
+                      f"*(This file is automatically updated by the Sentinel workflow whenever the pod restarts or updates its tunnel)*\n"
+                  )
                   with open("LATEST_TUNNEL_URL.md", "w", encoding="utf-8") as f:
                       f.write(doc_content)
 
