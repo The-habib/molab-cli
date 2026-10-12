@@ -32,3 +32,4 @@ htmlcov/
 .tox/
 .DS_Store
 pod_specs.json
+scratch/
