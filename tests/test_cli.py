@@ -40,7 +40,7 @@ def test_cli_json_flags():
     from unittest.mock import patch
     runner = CliRunner()
     
-    with patch("molab_cli.cli.inspect_auth_status", return_value={"authenticated": True, "user_email": "test@marimo.io"}):
+    with patch("molab_cli.commands.system.inspect_auth_status", return_value={"authenticated": True, "user_email": "test@marimo.io"}):
         res = runner.invoke(cli, ["status", "--json"])
         assert res.exit_code == 0
         assert '"authenticated": true' in res.output
